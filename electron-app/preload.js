@@ -3,12 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { dialog } = require('electron');
 
-const baseDir = path.resolve(__dirname, '..');
-const pathsToCheck = [
-  'spiele',
-  'isos',
-  'config_gui.json'
-];
+const isDev = process.env.NODE_ENV === 'development' || process.defaultApp;
+const baseDir = isDev ? process.cwd() : path.dirname(process.execPath);
+const pathsToCheck = ['spiele', 'isos', 'config_gui.json'];
 
 contextBridge.exposeInMainWorld('api', {
   install: (config) => {
@@ -51,18 +48,11 @@ contextBridge.exposeInMainWorld('api', {
       }
     }
     return true;
-  }
-});
-
-
-const { shell } = require('electron');
-
-contextBridge.exposeInMainWorld('api', {
-  ...module.exports,
+  },
   exportLog: (logContent) => {
     const logPath = path.join(baseDir, 'install-log.txt');
     fs.writeFileSync(logPath, logContent);
-    shell.showItemInFolder(logPath);
+    require('electron').shell.showItemInFolder(logPath);
   },
   importDropped: (isoPaths, folderPaths) => {
     const isoDir = path.join(baseDir, 'isos');
