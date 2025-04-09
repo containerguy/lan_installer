@@ -1,0 +1,17 @@
+{
+  "extends": ["config:recommended"],
+  "schedule": ["before 3am on monday"],
+  "packageRules": [
+    {
+      "matchManagers": ["npm"],
+      "matchPackagePatterns": ["electron", "electron-builder", "auto-changelog"],
+      "groupName": "Electron tools",
+      "labels": ["dependencies", "electron"],
+      "automerge": true,
+      "automergeType": "pr",
+      "updateTypes": ["patch", "minor"]
+    }
+  ],
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5
+}

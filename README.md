@@ -1,4 +1,7 @@
-# LAN Party Installer (Electron + PowerShell)
+# LAN Installer
+
+![Renovate enabled](https://img.shields.io/badge/dependencies-up%20to%20date-brightgreen?logo=renovatebot)
+[![Known Vulnerabilities](https://snyk.io/test/github/containerguy/lan_installer/badge.svg)](https://snyk.io/test/github/containerguy/lan_installer)
 
 Dieses Tool ermöglicht es, einen Windows-PC vollständig für eine LAN-Party vorzubereiten – inklusive Installation von Game-Launchern, Spielen (per Kopie oder ISO), GPU-Erkennung und Treiberinstallation.
 
