@@ -7,11 +7,11 @@ param(
 Import-Module "$PSScriptRoot\modules\core.psm1" -Force
 
 if ($Config -ne "") {
-    $yaml = ConvertFrom-Yaml (Get-Content $Config -Raw)
-    $installPath = $yaml.install_path
-    $spiele = $yaml.spiele
-    $launcher = $yaml.launcher
-    $isos = $yaml.isos
+    $json = Get-Content $Config -Raw | ConvertFrom-Json
+    $installPath = $json.installPath
+    $spiele = $json.spiele
+    $launcher = $json.launcher
+    $isos = $json.isos
 
     if ($Remote -and $TargetComputer) {
         Invoke-RemoteInstall -ComputerName $TargetComputer -Launcher $launcher -Spiele $spiele -ISOs $isos -InstallPath $installPath

@@ -23,13 +23,14 @@ jobs:
           cd electron-app
           npm install
 
-      - name: Build with electron-builder
+      - name: Generate changelog
+        run: |
+          npx auto-changelog -p
+
+      - name: Build portable executable
         run: |
           cd electron-app
-          npm run build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          npx electron-builder --win portable
 
       - name: Upload Release Artifacts
         uses: softprops/action-gh-release@v1
@@ -38,6 +39,6 @@ jobs:
             electron-app/dist/*.exe
             electron-app/dist/*.yml
             electron-app/dist/*.nupkg
+            CHANGELOG.md
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}

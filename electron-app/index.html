@@ -1,18 +1,72 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>LAN Party Installer</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; background-color: #f9f9f9; }
-    h1 { color: #444; }
-    .section { margin-bottom: 20px; }
+    body {
+      font-family: "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #1e1e2f;
+      color: #eee;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 26px;
+      color: #58a6ff;
+    }
+    .section { margin-bottom: 25px; }
     label { display: block; margin: 5px 0; }
-    input[type="checkbox"] { margin-right: 10px; }
-    button { padding: 10px 20px; font-size: 16px; }
-    #logArea { width: 100%; height: 150px; background: #000; color: #0f0; font-family: monospace; padding: 10px; overflow-y: scroll; }
-    #progress { width: 100%; height: 20px; background: #ccc; margin-top: 10px; }
-    #progressbar { width: 0%; height: 100%; background: #28a745; transition: width 0.5s; }
+    input[type="text"] {
+      width: 300px;
+      padding: 6px;
+      font-size: 14px;
+      border-radius: 4px;
+      border: none;
+    }
+    input[type="checkbox"] { margin-right: 8px; }
+    button {
+      padding: 8px 16px;
+      font-size: 14px;
+      background: #58a6ff;
+      border: none;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-top: 10px;
+      margin-right: 10px;
+    }
+    button:hover { background: #4084d6; }
+    #logArea {
+      width: 100%;
+      height: 150px;
+      background: #0e0e1c;
+      color: #00ff9f;
+      font-family: monospace;
+      padding: 10px;
+      overflow-y: scroll;
+      border-radius: 5px;
+    }
+    .progress-container {
+      margin-top: 10px;
+    }
+    .progress-label {
+      margin-bottom: 5px;
+    }
+    .progress {
+      width: 100%;
+      height: 18px;
+      background: #444;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progressbar {
+      height: 100%;
+      background: #00ff9f;
+      transition: width 0.4s ease;
+      width: 0%;
+    }
   </style>
 </head>
 <body>
@@ -20,68 +74,109 @@
 
   <div class="section">
     <h3>Installationspfad</h3>
-    <input id="installPath" type="text" value="D:\\Games" style="width: 400px;">
+    <input id="installPath" type="text" value="D:\\Games" />
+    <button onclick="selectFolder()">📁 Ordner wählen</button>
   </div>
 
   <div class="section">
     <h3>Launcher</h3>
-    <label><input type="checkbox" id="steam" checked> Steam</label>
-    <label><input type="checkbox" id="origin"> Origin</label>
-    <label><input type="checkbox" id="uplay"> UPlay</label>
-    <label><input type="checkbox" id="battlenet"> Battle.net</label>
+    <button onclick="toggleAll('launcherList', true)">Alle auswählen</button>
+    <button onclick="toggleAll('launcherList', false)">Keine</button>
+    <div id="launcherList">
+      <label><input type="checkbox" id="steam" checked /> Steam</label>
+      <label><input type="checkbox" id="origin" /> Origin</label>
+      <label><input type="checkbox" id="uplay" /> UPlay</label>
+      <label><input type="checkbox" id="battlenet" /> Battle.net</label>
+    </div>
   </div>
 
   <div class="section">
-    <h3>Spieleauswahl</h3>
-    <label><input type="checkbox" value="Counter-Strike" checked> Counter-Strike</label>
-    <label><input type="checkbox" value="Anno1800" checked> Anno1800</label>
+    <h3>Spiele</h3>
+    <button onclick="toggleAll('spieleList', true)">Alle auswählen</button>
+    <button onclick="toggleAll('spieleList', false)">Keine</button>
+    <div id="spieleList">🔄 Lädt Spiele...</div>
   </div>
 
   <div class="section">
     <h3>ISOs</h3>
-    <label><input type="checkbox" value="Crysis" checked> Crysis.iso</label>
-    <label><input type="checkbox" value="Doom3"> Doom3.iso</label>
+    <button onclick="toggleAll('isoList', true)">Alle auswählen</button>
+    <button onclick="toggleAll('isoList', false)">Keine</button>
+    <div id="isoList">🔄 Lädt ISOs...</div>
   </div>
 
   <div class="section">
-    <button onclick="startInstall()">Installation starten</button>
+    <button onclick="startInstall()">🚀 Installation starten</button>
   </div>
 
   <div class="section">
-    <div id="progress"><div id="progressbar"></div></div>
+    <div class="progress-container">
+      <div class="progress-label">Fortschritt</div>
+      <div class="progress"><div id="progressbar" class="progressbar"></div></div>
+    </div>
     <textarea id="logArea" readonly></textarea>
   </div>
 
   <script>
+    function selectFolder() {
+      window.api.selectFolder().then((path) => {
+        if (path) document.getElementById('installPath').value = path;
+      });
+    }
+
+    function toggleAll(containerId, state) {
+      document.querySelectorAll(`#${containerId} input[type=checkbox]`).forEach(cb => cb.checked = state);
+    }
+
     function startInstall() {
       const config = {
         installPath: document.getElementById('installPath').value,
-        launcher: [], spiele: [], isos: []
+        launcher: [],
+        spiele: [],
+        isos: []
       };
 
-      ['steam','origin','uplay','battlenet'].forEach(id => {
-        if (document.getElementById(id).checked) config.launcher.push(id);
+      document.querySelectorAll('#launcherList input:checked').forEach(cb => {
+        config.launcher.push(cb.id);
       });
 
-      document.querySelectorAll('input[type=checkbox][value]').forEach(cb => {
-        if (cb.checked && cb.value.endsWith('.iso')) {
-          config.isos.push({ name: cb.value.replace('.iso',''), path: `isos\\${cb.value}` });
-        } else if (cb.checked) {
-          config.spiele.push({ name: cb.value, path: `spiele\\${cb.value}` });
-        }
+      document.querySelectorAll('#spieleList input:checked').forEach(cb => {
+        config.spiele.push({ name: cb.value, path: `spiele\\${cb.value}` });
+      });
+
+      document.querySelectorAll('#isoList input:checked').forEach(cb => {
+        config.isos.push({ name: cb.value, path: `isos\\${cb.value}.iso` });
       });
 
       window.api.install(config);
     }
 
-    window.api.receive('log', msg => {
-      const logArea = document.getElementById('logArea');
-      logArea.value += msg + '\n';
+    function renderCheckboxList(listId, values) {
+      const list = document.getElementById(listId);
+      list.innerHTML = "";
+      if (values.length === 0) {
+        list.innerHTML = "<i>Keine Einträge gefunden.</i>";
+        return;
+      }
+      values.forEach(name => {
+        const label = document.createElement("label");
+        label.innerHTML = `<input type="checkbox" value="${name}" checked /> ${name}`;
+        list.appendChild(label);
+      });
+    }
+
+    window.api.receive("log", msg => {
+      const logArea = document.getElementById("logArea");
+      logArea.value += msg + "\n";
       logArea.scrollTop = logArea.scrollHeight;
     });
 
-    window.api.receive('progress', value => {
-      document.getElementById('progressbar').style.width = value + '%';
+    window.api.receive("progress", value => {
+      document.getElementById("progressbar").style.width = value + "%";
+    });
+
+    window.addEventListener("DOMContentLoaded", () => {
+      renderCheckboxList("spieleList", window.api.getGames());
+      renderCheckboxList("isoList", window.api.getISOs());
     });
   </script>
 </body>
