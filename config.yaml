@@ -1,0 +1,16 @@
+install_path: "D:\Games"
+launcher:
+  - steam
+  - origin
+  - uplay
+  - battle.net
+spiele:
+  - name: "Counter-Strike"
+    path: "spiele\Counter-Strike"
+    launcher: steam
+  - name: "Anno1800"
+    path: "spiele\Anno1800"
+    launcher: uplay
+isos:
+  - name: "Crysis"
+    path: "isos\crysis.iso"

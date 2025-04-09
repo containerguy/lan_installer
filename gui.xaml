@@ -1,0 +1,11 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="LAN-Installer" Height="250" Width="300">
+    <StackPanel Margin="10">
+        <TextBlock Text="Wähle aus, was installiert werden soll:" FontWeight="Bold" Margin="0 0 0 10"/>
+        <CheckBox x:Name="cbSteam" Content="Steam" />
+        <CheckBox x:Name="cbOrigin" Content="Origin" />
+        <CheckBox x:Name="cbUplay" Content="Uplay" />
+        <CheckBox x:Name="cbBattleNet" Content="Battle.net" />
+        <Button x:Name="btnInstall" Content="Installation starten" Margin="0 20 0 0" Padding="5"/>
+    </StackPanel>
+</Window>

@@ -1,0 +1,31 @@
+{
+  "name": "lanparty-installer",
+  "version": "1.0.0",
+  "description": "LAN Party Installer GUI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "build": {
+    "appId": "com.containerguy.laninstaller",
+    "productName": "LANPartyInstaller",
+    "publish": {
+      "provider": "github",
+      "owner": "containerguy",
+      "repo": "lan_installer"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "directories": {
+      "buildResources": "build"
+    }
+  },
+  "dependencies": {
+    "electron": "^27.0.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.6.0"
+  }
+}

@@ -1,0 +1,39 @@
+name: Build & Release LAN Installer
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          cd electron-app
+          npm install
+
+      - name: Build with electron-builder
+        run: |
+          cd electron-app
+          npm run build
+
+      - name: Upload Release Artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            electron-app/dist/*.exe
+            electron-app/dist/*.yml
+            electron-app/dist/*.nupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

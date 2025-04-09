@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LAN Party Installer</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background-color: #f9f9f9; }
+    h1 { color: #444; }
+    .section { margin-bottom: 20px; }
+    label { display: block; margin: 5px 0; }
+    input[type="checkbox"] { margin-right: 10px; }
+    button { padding: 10px 20px; font-size: 16px; }
+    #logArea { width: 100%; height: 150px; background: #000; color: #0f0; font-family: monospace; padding: 10px; overflow-y: scroll; }
+    #progress { width: 100%; height: 20px; background: #ccc; margin-top: 10px; }
+    #progressbar { width: 0%; height: 100%; background: #28a745; transition: width 0.5s; }
+  </style>
+</head>
+<body>
+  <h1>LAN Party Installer</h1>
+
+  <div class="section">
+    <h3>Installationspfad</h3>
+    <input id="installPath" type="text" value="D:\\Games" style="width: 400px;">
+  </div>
+
+  <div class="section">
+    <h3>Launcher</h3>
+    <label><input type="checkbox" id="steam" checked> Steam</label>
+    <label><input type="checkbox" id="origin"> Origin</label>
+    <label><input type="checkbox" id="uplay"> UPlay</label>
+    <label><input type="checkbox" id="battlenet"> Battle.net</label>
+  </div>
+
+  <div class="section">
+    <h3>Spieleauswahl</h3>
+    <label><input type="checkbox" value="Counter-Strike" checked> Counter-Strike</label>
+    <label><input type="checkbox" value="Anno1800" checked> Anno1800</label>
+  </div>
+
+  <div class="section">
+    <h3>ISOs</h3>
+    <label><input type="checkbox" value="Crysis" checked> Crysis.iso</label>
+    <label><input type="checkbox" value="Doom3"> Doom3.iso</label>
+  </div>
+
+  <div class="section">
+    <button onclick="startInstall()">Installation starten</button>
+  </div>
+
+  <div class="section">
+    <div id="progress"><div id="progressbar"></div></div>
+    <textarea id="logArea" readonly></textarea>
+  </div>
+
+  <script>
+    function startInstall() {
+      const config = {
+        installPath: document.getElementById('installPath').value,
+        launcher: [], spiele: [], isos: []
+      };
+
+      ['steam','origin','uplay','battlenet'].forEach(id => {
+        if (document.getElementById(id).checked) config.launcher.push(id);
+      });
+
+      document.querySelectorAll('input[type=checkbox][value]').forEach(cb => {
+        if (cb.checked && cb.value.endsWith('.iso')) {
+          config.isos.push({ name: cb.value.replace('.iso',''), path: `isos\\${cb.value}` });
+        } else if (cb.checked) {
+          config.spiele.push({ name: cb.value, path: `spiele\\${cb.value}` });
+        }
+      });
+
+      window.api.install(config);
+    }
+
+    window.api.receive('log', msg => {
+      const logArea = document.getElementById('logArea');
+      logArea.value += msg + '\n';
+      logArea.scrollTop = logArea.scrollHeight;
+    });
+
+    window.api.receive('progress', value => {
+      document.getElementById('progressbar').style.width = value + '%';
+    });
+  </script>
+</body>
+</html>
