@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "LAN Party Installer GUI",
   "author": "containerguy",
+  "private": true,
+  "type": "commonjs",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "lint": "eslint electron-app/*.js",
+    "lint:fix": "eslint electron-app/*.js --fix"
   },
   "build": {
     "appId": "com.containerguy.laninstaller",
@@ -25,6 +29,14 @@
   },
   "devDependencies": {
     "electron": "^27.0.0",
-    "electron-builder": "^24.6.0"
+    "electron-builder": "^24.6.0",
+    "eslint": "^9.24.0",
+    "husky": "^9.0.7",
+    "lint-staged": "^15.2.0"
+  },
+  "lint-staged": {
+    "electron-app/*.js": [
+      "eslint --fix"
+    ]
   }
 }
