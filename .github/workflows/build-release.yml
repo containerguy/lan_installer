@@ -23,8 +23,9 @@ jobs:
           cd electron-app
           npm install
 
-      - name: Generate changelog
+      - name: Prepare changelog generation
         run: |
+          copy electron-app\package.json .
           npx auto-changelog -p
 
       - name: Build portable executable
