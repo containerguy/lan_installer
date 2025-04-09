@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+
 <html>
 <head>
-  <meta charset="UTF-8" />
-  <title>LAN Party Installer</title>
-  <style>
+<meta charset="utf-8"/>
+<title>LAN Party Installer</title>
+<style>
     body {
       font-family: "Segoe UI", sans-serif;
       margin: 0;
@@ -70,53 +71,53 @@
   </style>
 </head>
 <body>
-  <h1>LAN Party Installer</h1>
 
-  <div class="section">
-    <h3>Installationspfad</h3>
-    <input id="installPath" type="text" value="D:\\Games" />
-    <button onclick="selectFolder()">📁 Ordner wählen</button>
-  </div>
-
-  <div class="section">
-    <h3>Launcher</h3>
-    <button onclick="toggleAll('launcherList', true)">Alle auswählen</button>
-    <button onclick="toggleAll('launcherList', false)">Keine</button>
-    <div id="launcherList">
-      <label><input type="checkbox" id="steam" checked /> Steam</label>
-      <label><input type="checkbox" id="origin" /> Origin</label>
-      <label><input type="checkbox" id="uplay" /> UPlay</label>
-      <label><input type="checkbox" id="battlenet" /> Battle.net</label>
-    </div>
-  </div>
-
-  <div class="section">
-    <h3>Spiele</h3>
-    <button onclick="toggleAll('spieleList', true)">Alle auswählen</button>
-    <button onclick="toggleAll('spieleList', false)">Keine</button>
-    <div id="spieleList">🔄 Lädt Spiele...</div>
-  </div>
-
-  <div class="section">
-    <h3>ISOs</h3>
-    <button onclick="toggleAll('isoList', true)">Alle auswählen</button>
-    <button onclick="toggleAll('isoList', false)">Keine</button>
-    <div id="isoList">🔄 Lädt ISOs...</div>
-  </div>
-
-  <div class="section">
-    <button onclick="startInstall()">🚀 Installation starten</button>
-  </div>
-
-  <div class="section">
-    <div class="progress-container">
-      <div class="progress-label">Fortschritt</div>
-      <div class="progress"><div id="progressbar" class="progressbar"></div></div>
-    </div>
-    <textarea id="logArea" readonly></textarea>
-  </div>
-
-  <script>
+<div class="section" id="warningBox" style="display:none;">
+<h3 style="color: orange;">⚠️ Fehlende Verzeichnisse oder Dateien</h3>
+<p>Die folgenden Verzeichnisse oder Dateien fehlen:</p>
+<ul id="missingList"></ul>
+<button onclick="fixStructure()">Ordner jetzt erstellen</button>
+</div>
+<h1>LAN Party Installer</h1>
+<div class="section">
+<h3>Installationspfad</h3>
+<input id="installPath" type="text" value="D:\\Games"/>
+<button onclick="selectFolder()">📁 Ordner wählen</button>
+</div>
+<div class="section">
+<h3>Launcher</h3>
+<button onclick="toggleAll('launcherList', true)">Alle auswählen</button>
+<button onclick="toggleAll('launcherList', false)">Keine</button>
+<div id="launcherList">
+<label><input checked="" id="steam" type="checkbox"/> Steam</label>
+<label><input id="origin" type="checkbox"/> Origin</label>
+<label><input id="uplay" type="checkbox"/> UPlay</label>
+<label><input id="battlenet" type="checkbox"/> Battle.net</label>
+</div>
+</div>
+<div class="section">
+<h3>Spiele</h3>
+<button onclick="toggleAll('spieleList', true)">Alle auswählen</button>
+<button onclick="toggleAll('spieleList', false)">Keine</button>
+<div id="spieleList">🔄 Lädt Spiele...</div>
+</div>
+<div class="section">
+<h3>ISOs</h3>
+<button onclick="toggleAll('isoList', true)">Alle auswählen</button>
+<button onclick="toggleAll('isoList', false)">Keine</button>
+<div id="isoList">🔄 Lädt ISOs...</div>
+</div>
+<div class="section">
+<button onclick="startInstall()">🚀 Installation starten</button>
+</div>
+<div class="section">
+<div class="progress-container">
+<div class="progress-label">Fortschritt</div>
+<div class="progress"><div class="progressbar" id="progressbar"></div></div>
+</div>
+<textarea id="logArea" readonly=""></textarea>
+</div>
+<script>
     function selectFolder() {
       window.api.selectFolder().then((path) => {
         if (path) document.getElementById('installPath').value = path;
@@ -178,6 +179,54 @@
       renderCheckboxList("spieleList", window.api.getGames());
       renderCheckboxList("isoList", window.api.getISOs());
     });
+  
+
+    window.addEventListener("DOMContentLoaded", () => {
+      renderCheckboxList("spieleList", window.api.getGames());
+      renderCheckboxList("isoList", window.api.getISOs());
+
+      const missing = window.api.checkStructure();
+      if (missing.length > 0) {
+        const box = document.getElementById("warningBox");
+        const list = document.getElementById("missingList");
+        box.style.display = "block";
+        missing.forEach(entry => {
+          const li = document.createElement("li");
+          li.textContent = entry;
+          list.appendChild(li);
+        });
+      }
+    });
+
+    function fixStructure() {
+      window.api.createStructure();
+      location.reload();
+    }
+</script>
+
+  <script>
+    function exportLog() {
+      const log = document.getElementById("logArea").value;
+      window.api.exportLog(log);
+    }
+
+    window.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files);
+      const isoFiles = files.filter(f => f.name.endsWith(".iso"));
+      const folders = files.filter(f => f.type === "");
+
+      if (isoFiles.length || folders.length) {
+        window.api.importDropped(isoFiles.map(f => f.path), folders.map(f => f.path));
+        setTimeout(() => location.reload(), 500);
+      }
+    });
   </script>
 </body>
+
 </html>
