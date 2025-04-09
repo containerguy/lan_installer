@@ -32,6 +32,9 @@ jobs:
         run: |
           cd electron-app
           npx electron-builder --win portable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Upload Release Artifacts
         uses: softprops/action-gh-release@v1
