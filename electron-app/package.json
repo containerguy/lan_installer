@@ -2,6 +2,7 @@
   "name": "lanparty-installer",
   "version": "1.0.0",
   "description": "LAN Party Installer GUI",
+  "author": "containerguy",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -22,10 +23,8 @@
       "buildResources": "build"
     }
   },
-  "dependencies": {
-    "electron": "^27.0.0"
-  },
   "devDependencies": {
+    "electron": "^27.0.0",
     "electron-builder": "^24.6.0"
   }
 }

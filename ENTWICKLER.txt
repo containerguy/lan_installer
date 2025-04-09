@@ -1,0 +1,56 @@
+🛠️ Entwickler-Hinweise für LANPartyInstaller
+
+Dieses Projekt ist so aufgebaut, dass es für Endnutzer (LAN-Teilnehmer) ohne weitere Software direkt funktioniert.
+
+✅ Endnutzer benötigen:
+- Keine Installation von Node.js, npm oder Git
+- Nur: entpacken + `LANPartyInstaller.exe` starten
+
+❌ NICHT verteilen an Nutzer:
+- Die Ordner `electron-app/`, `.github/`, `release.*`
+- Diese sind NUR für dich als Entwickler gedacht
+
+------------------------------------------------------------
+
+🔁 AUTO-UPDATER via GitHub Releases
+- Funktioniert über `electron-updater`
+- GitHub-Repo: https://github.com/containerguy/lan_installer
+- Stelle Releases mit `.exe`, `.nupkg` und `latest.yml` bereit
+
+------------------------------------------------------------
+
+🚀 RELEASE ERSTELLEN
+
+Schritt-für-Schritt:
+
+1. Stelle sicher, dass du Node.js & Git installiert hast
+2. Passe ggf. `package.json` in `electron-app/` an
+3. Terminal öffnen:
+
+   ```powershell
+   .\release.ps1 -version 1.0.1
+   ```
+
+   oder
+
+   ```bash
+   ./release.sh 1.0.1
+   ```
+
+4. Release-Tag wird erstellt, GitHub Action startet automatisch
+5. Deine App wird gebaut und im Release veröffentlicht
+
+------------------------------------------------------------
+
+🧪 LOKAL TESTEN (Windows)
+1. Öffne `electron-app/` im Terminal
+2. Führe aus:
+
+   ```bash
+   npm install
+   npm run start
+   ```
+
+------------------------------------------------------------
+
+💬 Fragen? Kontakt: containerguy on GitHub 😎
