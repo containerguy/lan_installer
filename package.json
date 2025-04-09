@@ -1,6 +1,6 @@
 {
   "name": "lanparty-installer",
-  "version": "1.0.8",
+  "version": "1.0.7",
   "description": "LAN Party Installer GUI",
   "author": "containerguy",
   "private": true,
