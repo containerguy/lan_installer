@@ -69,3 +69,26 @@ contextBridge.exposeInMainWorld('api', {
     });
   }
 });
+
+
+contextBridge.exposeInMainWorld('api', {
+  ...module.exports,
+  getBaseDir: () => baseDir,
+  detectPS: () => {
+    const paths = [
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      'C:\\Program Files\\PowerShell\\pwsh.exe'
+    ];
+    const existing = paths.find(p => fs.existsSync(p));
+    return { exists: !!existing, command: existing || "nicht gefunden" };
+  },
+  loadConfig: () => {
+    const p = path.join(baseDir, 'config_gui.json');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : "{}";
+  },
+  saveConfig: (content) => {
+    const p = path.join(baseDir, 'config_gui.json');
+    fs.writeFileSync(p, content, 'utf-8');
+  }
+});

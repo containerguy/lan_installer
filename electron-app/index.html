@@ -71,7 +71,6 @@
   </style>
 </head>
 <body>
-
 <div class="section" id="warningBox" style="display:none;">
 <h3 style="color: orange;">⚠️ Fehlende Verzeichnisse oder Dateien</h3>
 <p>Die folgenden Verzeichnisse oder Dateien fehlen:</p>
@@ -109,6 +108,20 @@
 </div>
 <div class="section">
 <button onclick="startInstall()">🚀 Installation starten</button>
+</div>
+
+<div class="section" id="toolsSection">
+<h3>🛠 Tools</h3>
+<button onclick="runDiagnostics()">Systemdiagnose</button>
+<button onclick="toggleConfigEditor()">Konfiguration bearbeiten</button>
+<div id="diagnosticsOutput" style="white-space:pre; margin-top:10px; background:#222; color:#0f0; padding:10px; display:none;"></div>
+<div id="configEditor" style="display:none; margin-top:10px;">
+<textarea id="configContent" style="width:100%; height:200px; background:#1e1e2f; color:#fff; font-family:monospace; padding:10px;"></textarea>
+<div style="margin-top:10px;">
+<button onclick="saveConfig()">💾 Speichern</button>
+<button onclick="loadConfig()">🔁 Neu laden</button>
+</div>
+</div>
 </div>
 <div class="section">
 <div class="progress-container">
@@ -202,9 +215,41 @@
       window.api.createStructure();
       location.reload();
     }
-</script>
 
-  <script>
+    function runDiagnostics() {
+      const base = window.api.getBaseDir();
+      const missing = window.api.checkStructure();
+      const ps = window.api.detectPS();
+      let msg = `📁 Base Directory: ${base}\n`;
+      msg += `📂 Verzeichnisse vorhanden: ${missing.length === 0 ? "Ja" : "Fehlen (" + missing.join(", ") + ")" }\n`;
+      msg += `⚡ PowerShell verfügbar: ${ps.exists} (${ps.command})`;
+      const out = document.getElementById("diagnosticsOutput");
+      out.innerText = msg;
+      out.style.display = "block";
+    }
+
+    function toggleConfigEditor() {
+      const el = document.getElementById("configEditor");
+      if (el.style.display === "none") {
+        loadConfig();
+        el.style.display = "block";
+      } else {
+        el.style.display = "none";
+      }
+    }
+
+    function loadConfig() {
+      const content = window.api.loadConfig();
+      document.getElementById("configContent").value = content;
+    }
+
+    function saveConfig() {
+      const content = document.getElementById("configContent").value;
+      window.api.saveConfig(content);
+      alert("Konfiguration gespeichert.");
+    }
+</script>
+<script>
     function exportLog() {
       const log = document.getElementById("logArea").value;
       window.api.exportLog(log);
@@ -228,5 +273,4 @@
     });
   </script>
 </body>
-
 </html>

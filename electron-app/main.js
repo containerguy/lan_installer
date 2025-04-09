@@ -22,7 +22,11 @@ function createWindow () {
 app.whenReady().then(createWindow);
 
 ipcMain.on('install', (event, configPath) => {
-  const ps = spawn('powershell.exe', [
+  const psCmd = fs.existsSync('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    ? 'powershell.exe'
+    : 'pwsh.exe';
+
+  const ps = spawn(psCmd, [
     '-ExecutionPolicy', 'Bypass',
     '-File', 'install.ps1',
     '-Config', configPath
