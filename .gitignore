@@ -1,3 +1,5 @@
 installer/
 isos/
 spiele/
+electron-app/node_modules/
+electron-app/package-lock.json
