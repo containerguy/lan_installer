@@ -19,7 +19,9 @@ jobs:
         run: |
           git config user.name "lan-installer-bot"
           git config user.email "bot@lan.local"
+          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/containerguy/lan_installer.git
           git tag $VERSION
           git push origin $VERSION
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
