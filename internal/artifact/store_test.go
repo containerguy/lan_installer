@@ -571,3 +571,47 @@ func TestGarbageCollectRetainsCatalogAndReleaseReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVerifyRenewsGarbageCollectionGraceForReusedArtifact(t *testing.T) {
+	ctx := context.Background()
+	metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	if _, err = metadata.BootstrapAdmin(ctx, "admin", "hash"); err != nil {
+		t.Fatal(err)
+	}
+	user, err := metadata.UserByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := New(t.TempDir(), metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("reused client update")
+	stored, err := artifacts.IngestComputed(ctx, 1024, "application/vnd.microsoft.portable-executable", bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	if err = metadata.RenewArtifactGCGrace(ctx, stored.Digest, old); err != nil {
+		t.Fatal(err)
+	}
+	if err = artifacts.Verify(ctx, stored.Digest, stored.SizeBytes, stored.ContentType); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC().Add(-24 * time.Hour)
+	result, err := artifacts.GarbageCollect(ctx, cutoff, 100, user.ID, "test")
+	if err != nil || result.Removed != 0 {
+		t.Fatalf("verified reused artifact lost its grace: %#v %v", result, err)
+	}
+	if err = metadata.RenewArtifactGCGrace(ctx, stored.Digest, old); err != nil {
+		t.Fatal(err)
+	}
+	result, err = artifacts.GarbageCollect(ctx, cutoff, 100, user.ID, "test")
+	if err != nil || result.Removed != 1 {
+		t.Fatalf("expired unreferenced artifact was not collected: %#v %v", result, err)
+	}
+}

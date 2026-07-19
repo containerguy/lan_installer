@@ -46,8 +46,8 @@ func TestEventReleasePublicationIsAtomicMonotonicAndExplicitlyActivated(t *testi
 		t.Fatalf("normalized release artifact reference: %d %v", normalizedReferences, err)
 	}
 	prepared := false
-	removed, err := st.DeleteArtifactIfUnreferenced(ctx, digest, func() error { prepared = true; return nil }, &AuditEntry{ActorUserID: 1, Action: "garbage_collect_artifact"})
-	if err != nil || removed || prepared {
+	removed, err := st.DeleteArtifactIfUnreferenced(ctx, digest, time.Now().UTC(), func() error { prepared = true; return nil }, &AuditEntry{ActorUserID: 1, Action: "garbage_collect_artifact"})
+	if err != nil || removed || !prepared {
 		t.Fatalf("release artifact considered collectable: removed=%v prepared=%v err=%v", removed, prepared, err)
 	}
 	if _, err = st.ActiveEventRelease(ctx); err == nil {

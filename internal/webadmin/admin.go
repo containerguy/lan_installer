@@ -89,6 +89,8 @@ func New(st *store.Store, secureCookies bool, vault *secretbox.Box, options ...O
 	a.mux.HandleFunc("POST /admin/api/v1/cache-jobs", a.apiRoute(a.idempotentPost("POST /admin/api/v1/cache-jobs", a.enqueueCacheJobAPI)))
 	a.mux.HandleFunc("POST /admin/api/v1/cache-jobs/{id}/cancel", a.apiRoute(a.idempotentPost("POST /admin/api/v1/cache-jobs/{id}/cancel", a.cancelCacheJobAPI)))
 	a.mux.HandleFunc("POST /admin/api/v1/cache-jobs/{id}/retry", a.apiRoute(a.idempotentPost("POST /admin/api/v1/cache-jobs/{id}/retry", a.retryCacheJobAPI)))
+	a.mux.HandleFunc("GET /admin/api/v1/cache-status", a.apiRoute(a.cacheStatusAPI))
+	a.mux.HandleFunc("POST /admin/api/v1/cache-gc", a.apiRoute(a.idempotentPost("POST /admin/api/v1/cache-gc", a.garbageCollectCacheAPI)))
 	a.mux.HandleFunc("GET /admin/api/v1/releases/status", a.apiRoute(a.releaseStatusAPI))
 	return a
 }

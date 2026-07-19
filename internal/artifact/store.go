@@ -49,6 +49,11 @@ type GCResult struct {
 	RemovedBytes      int64
 }
 
+func (s *Store) Usage(ctx context.Context) (int64, int64, error) {
+	usage, err := s.metadata.ArtifactUsage(ctx)
+	return usage, s.quota, err
+}
+
 func New(root string, metadata *lanstore.Store) (*Store, error) {
 	return NewWithQuota(root, metadata, int64(^uint64(0)>>1))
 }
@@ -325,6 +330,10 @@ func (s *Store) OpenVerified(ctx context.Context, digest string) (Blob, error) {
 }
 
 func (s *Store) Verify(ctx context.Context, digest string, size int64, contentType string) error {
+	digestLock, _ := s.locks.LoadOrStore(digest, &sync.Mutex{})
+	mutex := digestLock.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
 	blob, err := s.OpenVerified(ctx, digest)
 	if err != nil {
 		return err
@@ -333,7 +342,7 @@ func (s *Store) Verify(ctx context.Context, digest string, size int64, contentTy
 	if blob.SizeBytes != size || (contentType != "" && blob.ContentType != contentType) {
 		return ErrCorrupt
 	}
-	return nil
+	return s.metadata.RenewArtifactGCGrace(ctx, digest, time.Now().UTC())
 }
 
 func (s *Store) GarbageCollect(ctx context.Context, before time.Time, limit int, actorID int64, remoteAddr string) (GCResult, error) {
@@ -346,19 +355,19 @@ func (s *Store) GarbageCollect(ctx context.Context, before time.Time, limit int,
 	}
 	result := GCResult{Examined: len(candidates)}
 	for _, candidate := range candidates {
-		removed, removeErr := s.deleteUnreferenced(ctx, candidate, actorID, remoteAddr)
-		if removeErr != nil {
-			return result, removeErr
-		}
+		removed, removeErr := s.deleteUnreferenced(ctx, candidate, before, actorID, remoteAddr)
 		if removed {
 			result.Removed++
 			result.RemovedBytes += candidate.SizeBytes
+		}
+		if removeErr != nil {
+			return result, removeErr
 		}
 	}
 	return result, nil
 }
 
-func (s *Store) deleteUnreferenced(ctx context.Context, candidate lanstore.Artifact, actorID int64, remoteAddr string) (bool, error) {
+func (s *Store) deleteUnreferenced(ctx context.Context, candidate lanstore.Artifact, before time.Time, actorID int64, remoteAddr string) (bool, error) {
 	digestLock, _ := s.locks.LoadOrStore(candidate.Digest, &sync.Mutex{})
 	mutex := digestLock.(*sync.Mutex)
 	mutex.Lock()
@@ -383,7 +392,7 @@ func (s *Store) deleteUnreferenced(ctx context.Context, candidate lanstore.Artif
 		renamed = true
 		return nil
 	}
-	removed, err := s.metadata.DeleteArtifactIfUnreferenced(ctx, candidate.Digest, prepare, &lanstore.AuditEntry{ActorUserID: actorID, Action: "garbage_collect_artifact", RemoteAddr: remoteAddr})
+	removed, err := s.metadata.DeleteArtifactIfUnreferenced(ctx, candidate.Digest, before, prepare, &lanstore.AuditEntry{ActorUserID: actorID, Action: "garbage_collect_artifact", RemoteAddr: remoteAddr})
 	if err != nil {
 		if renamed {
 			_ = os.Rename(trash, destination)
@@ -391,6 +400,11 @@ func (s *Store) deleteUnreferenced(ctx context.Context, candidate lanstore.Artif
 		return false, err
 	}
 	if !removed {
+		if renamed {
+			if err = os.Rename(trash, destination); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 	if renamed {

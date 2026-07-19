@@ -54,6 +54,56 @@ func TestEventsPageIncludesAdminReleaseWorkflow(t *testing.T) {
 	}
 }
 
+func TestCatalogPageIncludesRoleAwareCacheManagement(t *testing.T) {
+	vault, _ := secretbox.New(make([]byte, 32))
+	st, admin, cookie, _ := sourceAPITestAdmin(t, vault, &fakeSourceTester{})
+	defer st.Close()
+	request := httptest.NewRequest(http.MethodGet, "/admin/catalog?tab=game-versions", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	body := response.Body.String()
+	for _, fragment := range []string{`id="cache-management"`, `id="cache-usage-progress"`, `id="cache-gc-age"`, `id="run-cache-gc"`, "Referenzierte Katalog- und Release-Artefakte"} {
+		if response.Code != http.StatusOK || !strings.Contains(body, fragment) {
+			t.Fatalf("admin cache management misses %q: %d", fragment, response.Code)
+		}
+	}
+	user, err := st.UserByUsername(t.Context(), "admin")
+	if err != nil || st.SetUserRoles(t.Context(), user.ID, "viewer") != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/admin/catalog?tab=game-versions", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	body = response.Body.String()
+	if response.Code != http.StatusOK || strings.Contains(body, `id="run-cache-gc"`) || !strings.Contains(body, "Nur Administratoren dürfen unreferenzierte Cacheartefakte entfernen") {
+		t.Fatalf("viewer cache management roles: %d", response.Code)
+	}
+}
+
+func TestCacheControlsAreDisabledOnlyDuringGarbageCollection(t *testing.T) {
+	source := string(catalogJS)
+	mutationStart := strings.Index(source, "async function mutateCacheJob")
+	gcStart := strings.Index(source, "async function runCacheGarbageCollection")
+	if mutationStart < 0 || gcStart < 0 {
+		t.Fatal("cache control functions are missing from catalog asset")
+	}
+	mutationEnd := strings.Index(source[mutationStart:], "\n  function rowFor")
+	gcEnd := strings.Index(source[gcStart:], "\n  function render()")
+	if mutationEnd < 0 || gcEnd < 0 {
+		t.Fatal("cache control function boundaries are missing from catalog asset")
+	}
+	mutation := source[mutationStart : mutationStart+mutationEnd]
+	if strings.Contains(mutation, `byId("cache-gc-age").disabled`) {
+		t.Fatal("cache job mutation changes the garbage collection age control")
+	}
+	gc := source[gcStart : gcStart+gcEnd]
+	if !strings.Contains(gc, `byId("cache-gc-age").disabled = true`) || !strings.Contains(gc, `byId("cache-gc-age").disabled = false`) {
+		t.Fatal("garbage collection does not disable and restore its age control")
+	}
+}
+
 func TestCatalogAPILifecycleRolesAndReferenceErrors(t *testing.T) {
 	vault, _ := secretbox.New(make([]byte, 32))
 	st, admin, cookie, csrf := sourceAPITestAdmin(t, vault, &fakeSourceTester{})

@@ -53,7 +53,7 @@ Der WebDAV-Masterschlüssel liegt ausschließlich in `secrets/webdav-master-key.
 - `LANREADY_TRUSTED_PROXY_CIDRS` enthält ausschließlich die mit `docker network inspect` verifizierten CIDRs des Nginx-Proxy-Manager-Netzes. Nur von dort wird `X-Forwarded-For` für persistente Enrollment-Rate-Limits ausgewertet.
 - Der Client-Token sollte für jede Veranstaltung neu erzeugt werden.
 - Private, Loopback- und Link-Local-Ziele sind für Quellentests standardmäßig gesperrt. Interne HTTPS-Ziele werden ausschließlich über `LANREADY_SOURCE_PRIVATE_ALLOWLIST=host=cidr,cidr;host=cidr` freigegeben; Hostname und CIDR müssen exakt passen.
-- Der CAS liegt im Container immer unter `/cache`. `LANREADY_CACHE_HOST_PATH` bestimmt ausschließlich den Hostpfad; bis zur NAS-Anbindung ist `./data/cache` der lokale Fallback. Das Verzeichnis muss für `LANREADY_UID:LANREADY_GID` beschreibbar sein. `LANREADY_CACHE_QUOTA_BYTES` steht übergangsweise auf 10 GiB, weil auf dem aktuellen Root-Dateisystem am 18.07.2026 nur rund 20,16 GB frei waren; nach Einbindung des NAS muss die Quota ausdrücklich angepasst werden.
+- Der CAS liegt im Container immer unter `/cache`. `LANREADY_CACHE_HOST_PATH` bestimmt ausschließlich den Hostpfad; `./data/cache` ist der lokale Entwicklungsfallback. Das Verzeichnis muss für `LANREADY_UID:LANREADY_GID` beschreibbar sein. Die produktive Quota muss mit `LANREADY_CACHE_QUOTA_BYTES` ausdrücklich unterhalb der verfügbaren Volume-Kapazität gesetzt werden.
 
 ### Wie der Cache arbeitet
 
@@ -61,7 +61,7 @@ LANReady ist kein transparenter Steam-/EA-/Ubisoft-Proxy. Admin oder Operator pl
 
 Der Content-Addressed Store (CAS) schreibt zunächst eine private temporäre Datei unter `/cache/.tmp`, begrenzt den Download durch Quota und maximale Artefaktgröße, berechnet SHA-256 und prüft eine deklarierte Größe beziehungsweise Prüfsumme. Erst nach `fsync`, schreibgeschütztem Dateimodus und atomarem Rename wird das Artefakt unter `/cache/sha256/<erste-zwei-hexzeichen>/<sha256>` sichtbar und danach in SQLite registriert. Bereits vorhandene Artefakte werden vor Wiederverwendung vollständig verifiziert. Auch vor einer Clientausgabe wird Größe, regulärer Dateityp und SHA-256 erneut geprüft; Downloads unterstützen einen authentifizierten einzelnen HTTP-Range für Resume.
 
-Die Quota basiert auf den in SQLite registrierten Artefaktgrößen. Automatische Verdrängung findet derzeit nicht statt: Der transaktionale Garbage-Collection-Kern ist implementiert, aber noch nicht über UI, API oder einen Zeitplan aktiviert. Absturzreste in `.tmp` werden deshalb ebenfalls noch nicht automatisch bereinigt. Bis dieser Folgeslice abgeschlossen ist, muss ausreichend Reserve unterhalb der physischen NAS-Kapazität bleiben.
+Die Quota basiert auf den in SQLite registrierten Artefaktgrößen. Admins sehen Verbrauch und Quota in der Katalog-UI und können unreferenzierte Artefakte kontrolliert nach einem Mindestalter von 24 Stunden entfernen; Operator und Viewer sehen den Status nur lesend. Katalog-, Release- und aktive Cachejob-Referenzen werden unmittelbar vor dem Löschen erneut transaktional geprüft. Eine erfolgreiche vollständige Verifikation oder CAS-Wiederverwendung erneuert die 24-Stunden-Gnadenfrist. Der GC ist idempotent, meldet partielle Läufe ausdrücklich und hält während langsamer NFS-Dateisystemoperationen keine SQLite-Verbindung. Eine automatische Zeitplanung und die allgemeine Bereinigung alter Ingest-Temporärdateien sind noch nicht implementiert; deshalb bleibt physische Reserve unterhalb der NAS-Kapazität erforderlich.
 
 ### Fail-closed Netzwerk-Cache
 
@@ -431,6 +431,8 @@ Im Manifest wird der Mirror mit `http://SERVER-IP:8081` und einer niedrigeren Pr
 | `GET/POST` | `/admin/api/v1/cache-jobs` | Sitzung; Mutation zusätzlich CSRF + Operator/Admin | Cache-Aufträge anzeigen oder versionbezogen einplanen |
 | `POST` | `/admin/api/v1/cache-jobs/{id}/cancel` | Sitzung + CSRF + Operator/Admin | laufenden oder wartenden Cache-Auftrag abbrechen |
 | `POST` | `/admin/api/v1/cache-jobs/{id}/retry` | Sitzung + CSRF + Operator/Admin | fehlgeschlagenen/abgebrochenen Auftrag erneut einplanen |
+| `GET` | `/admin/api/v1/cache-status` | Sitzung | registrierten Cacheverbrauch und Quota lesen |
+| `POST` | `/admin/api/v1/cache-gc` | Admin-Sitzung + CSRF + Idempotency-Key | alte unreferenzierte CAS-Artefakte kontrolliert entfernen |
 
 Tokens werden als `Authorization: Bearer TOKEN` gesendet.
 
@@ -452,7 +454,7 @@ Die Ergebnisse liegen in `bin/`.
 - Der private Ed25519-Schlüssel bleibt offline.
 - Downloads landen zunächst in `.lanready.part` und ersetzen Dateien erst nach Größen- und SHA-256-Prüfung.
 - Das MVP führt keine heruntergeladenen Skripte aus und speichert keine Launcher-Zugangsdaten.
-- Die sichere Admin-Basis, Katalog-/Events-CRUD, persistente HTTPS/WebDAV-Cache-Aufträge, Launcher-Erkennung und per-user Client-Autostart sind vorhanden. Cache-Garbage-Collection, automatische unsignierte Event-Kandidaten, Installationsorchestrierung und differenzielles Chunking folgen in weiteren Slices.
+- Die sichere Admin-Basis, Katalog-/Events-CRUD, persistente HTTPS/WebDAV-Cache-Aufträge, manuelle Cache-Garbage-Collection mit Status-UI, Launcher-Erkennung und per-user Client-Autostart sind vorhanden. Automatische unsignierte Event-Kandidaten, Installationsorchestrierung und differenzielles Chunking folgen in weiteren Slices.
 - Launcher können eigene Updates erzwingen; LANReady umgeht diese Vorgaben nicht.
 
 ## Lizenz

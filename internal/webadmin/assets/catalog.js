@@ -9,7 +9,7 @@
   const initialTab = document.querySelector('meta[name="initial-tab"]').content;
 	const cacheHelpers = window.LANReadyCatalogCache;
   const validTabs = ["games", "launchers", "launcher-versions", "game-versions", "events"];
-  const state = { data: null, tab: validTabs.includes(initialTab) ? initialTab : "games", selected: null, opener: null, dirty: false, busy: false, entityKey: "", deactivateKey: "", assignmentKey: "", releaseKey: "", releaseEnvelope: null, releasePayload: null, releaseStatus: null, updateKey: "", updateEnvelope: null, updatePayload: null, updateArtifactReady: false, cacheMutationKeys: {}, cachePollTimer: 0, disabledControls: [] };
+  const state = { data: null, tab: validTabs.includes(initialTab) ? initialTab : "games", selected: null, opener: null, dirty: false, busy: false, entityKey: "", deactivateKey: "", assignmentKey: "", releaseKey: "", releaseEnvelope: null, releasePayload: null, releaseStatus: null, updateKey: "", updateEnvelope: null, updatePayload: null, updateArtifactReady: false, cacheStatus: null, cacheMutationKeys: {}, cachePollTimer: 0, disabledControls: [] };
 
   const config = {
     games: {
@@ -365,6 +365,7 @@
     byId("event-assignment").hidden = state.tab !== "events";
     byId("event-release").hidden = state.tab !== "events";
     byId("client-update-release").hidden = state.tab !== "events";
+    byId("cache-management").hidden = state.tab !== "launcher-versions" && state.tab !== "game-versions";
     byId("add-entity") && (byId("add-entity").textContent = current.singular + " hinzufügen");
     updateStatusFilter();
 
@@ -379,6 +380,54 @@
     byId("catalog-panel").setAttribute("aria-labelledby", "tab-" + state.tab);
     if (scrollTab && activeTab) {
       requestAnimationFrame(() => activeTab.scrollIntoView({ behavior: "auto", block: "nearest", inline: "center" }));
+    }
+  }
+
+  function renderCacheManagement(message = "") {
+    const usage = Number(state.cacheStatus?.usageBytes || 0);
+    const quota = Number(state.cacheStatus?.quotaBytes || 0);
+    const percentage = quota > 0 ? Math.min(100, Math.max(0, Math.round(usage * 1000 / quota) / 10)) : 0;
+    byId("cache-usage").textContent = quota > 0 ? formatBytes(usage) + " von " + formatBytes(quota) + " registriert" : "Cacheverbrauch ist nicht verfügbar";
+    byId("cache-usage-detail").textContent = quota > 0 ? percentage.toLocaleString("de-DE") + " % der konfigurierten Quota. Temporäre oder verwaiste Dateien außerhalb der Metadaten sind nicht enthalten." : "Prüfe Server- und Cachekonfiguration.";
+    const progress = byId("cache-usage-progress");
+    progress.value = percentage;
+    progress.textContent = percentage.toLocaleString("de-DE") + " %";
+    if (message) byId("cache-gc-result").textContent = message;
+  }
+
+  async function loadCacheStatus() {
+    try {
+      state.cacheStatus = await api("/admin/api/v1/cache-status");
+      renderCacheManagement();
+    } catch (error) {
+      state.cacheStatus = null;
+      renderCacheManagement("Cacheverbrauch konnte nicht geladen werden: " + errorText(error));
+    }
+  }
+
+  async function runCacheGarbageCollection() {
+    if (state.busy || !canDelete) return;
+    const age = Number(byId("cache-gc-age").value);
+    const label = byId("cache-gc-age").selectedOptions[0]?.textContent || "der gewählten Frist";
+    if (!window.confirm("Alle unreferenzierten Cacheartefakte älter als „" + label + "“ werden dauerhaft entfernt. Katalog- und Releaseartefakte bleiben geschützt. Fortfahren?")) return;
+    const button = byId("run-cache-gc");
+    state.busy = true;
+    button.disabled = true;
+    byId("cache-gc-age").disabled = true;
+    byId("cache-management").setAttribute("aria-busy", "true");
+    byId("cache-gc-result").textContent = "Unreferenzierte Cacheartefakte werden geprüft …";
+    try {
+      const result = await api("/admin/api/v1/cache-gc", { method: "POST", headers: { "Idempotency-Key": newIdempotencyKey() }, body: { minimumAgeHours: age, limit: 1000 } });
+      state.cacheStatus = { usageBytes: result.usageBytes, quotaBytes: result.quotaBytes };
+      const message = result.removed > 0 ? result.removed + (result.removed === 1 ? " Artefakt" : " Artefakte") + " entfernt, " + formatBytes(result.removedBytes) + " registrierten Cache freigegeben." : "Keine passenden unreferenzierten Artefakte gefunden.";
+      renderCacheManagement(message + " Geprüft: " + result.examined + "." + (result.partial ? " Der Lauf wurde nach einem Fehler sicher beendet; starte ihn erneut." : result.examined >= 1000 ? " Das Prüflimit wurde erreicht; möglicherweise ist ein weiterer Lauf nötig." : ""));
+    } catch (error) {
+      byId("cache-gc-result").textContent = errorText(error);
+    } finally {
+      state.busy = false;
+      button.disabled = false;
+      byId("cache-gc-age").disabled = false;
+      byId("cache-management").setAttribute("aria-busy", "false");
     }
   }
 
@@ -1234,7 +1283,7 @@
     }
     try {
       state.data = normalizeSnapshot(await api("/admin/api/v1/catalog"));
-      await loadReleaseStatus();
+      await Promise.all([loadReleaseStatus(), loadCacheStatus()]);
       refreshSelects(state.selected || {});
       render();
 	  scheduleCachePoll();
@@ -1297,6 +1346,7 @@
   byId("catalog-form").addEventListener("change", () => { if (canEdit && !byId("catalog-editor").hidden) { state.dirty = true; state.entityKey = ""; } });
   byId("deactivate-entity")?.addEventListener("click", deactivateEntity);
   byId("delete-entity")?.addEventListener("click", deleteEntity);
+  byId("run-cache-gc")?.addEventListener("click", runCacheGarbageCollection);
   byId("assignment-form")?.addEventListener("submit", saveAssignment);
   byId("assignment-form")?.addEventListener("input", () => { state.assignmentKey = ""; });
   byId("assignment-form")?.addEventListener("change", () => { state.assignmentKey = ""; });

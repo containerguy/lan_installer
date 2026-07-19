@@ -24,7 +24,16 @@ func (s *Store) ArtifactGCCandidates(ctx context.Context, before time.Time, limi
 	if limit < 1 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT digest,size_bytes,content_type,created_at FROM artifact_blobs WHERE created_at<=? ORDER BY created_at,digest LIMIT ?`, before.UTC().Unix(), limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.digest,a.size_bytes,a.content_type,a.created_at
+		FROM artifact_blobs a
+		WHERE a.created_at<=?
+		AND NOT EXISTS(SELECT 1 FROM launcher_versions WHERE sha256=a.digest)
+		AND NOT EXISTS(SELECT 1 FROM game_versions WHERE sha256=a.digest)
+		AND NOT EXISTS(SELECT 1 FROM event_release_artifacts WHERE digest=a.digest)
+		AND NOT EXISTS(SELECT 1 FROM client_update_releases WHERE artifact_digest=a.digest)
+		AND NOT EXISTS(SELECT 1 FROM cache_jobs WHERE status IN ('queued','running') AND expected_sha256=a.digest)
+		AND NOT EXISTS(SELECT 1 FROM cache_jobs WHERE status='running' AND expected_sha256='')
+		ORDER BY a.created_at,a.digest LIMIT ?`, before.UTC().Unix(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -42,18 +51,24 @@ func (s *Store) ArtifactGCCandidates(ctx context.Context, before time.Time, limi
 	return candidates, rows.Err()
 }
 
-func (s *Store) DeleteArtifactIfUnreferenced(ctx context.Context, digest string, prepare func() error, audit *AuditEntry) (bool, error) {
-	if !artifactDigestPattern.MatchString(digest) || prepare == nil || audit == nil {
+func (s *Store) DeleteArtifactIfUnreferenced(ctx context.Context, digest string, before time.Time, prepare func() error, audit *AuditEntry) (bool, error) {
+	if !artifactDigestPattern.MatchString(digest) || before.IsZero() || prepare == nil || audit == nil {
 		return false, errors.New("artifact garbage collection request is invalid")
+	}
+	if err := prepare(); err != nil {
+		return false, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	var exists int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifact_blobs WHERE digest=?`, digest).Scan(&exists); err != nil || exists != 1 {
+	var createdAt int64
+	if err = tx.QueryRowContext(ctx, `SELECT created_at FROM artifact_blobs WHERE digest=?`, digest).Scan(&createdAt); err != nil {
 		return false, err
+	}
+	if createdAt > before.UTC().Unix() {
+		return false, nil
 	}
 	var references int64
 	if err = tx.QueryRowContext(ctx, `SELECT
@@ -61,14 +76,12 @@ func (s *Store) DeleteArtifactIfUnreferenced(ctx context.Context, digest string,
 		(SELECT COUNT(*) FROM game_versions WHERE sha256=?)+
 		(SELECT COUNT(*) FROM event_release_artifacts WHERE digest=?)+
 		(SELECT COUNT(*) FROM client_update_releases WHERE artifact_digest=?)+
-		(SELECT COUNT(*) FROM cache_jobs WHERE status IN ('queued','running') AND expected_sha256=?)`, digest, digest, digest, digest, digest).Scan(&references); err != nil {
+		(SELECT COUNT(*) FROM cache_jobs WHERE status IN ('queued','running') AND expected_sha256=?)+
+		(SELECT COUNT(*) FROM cache_jobs WHERE status='running' AND expected_sha256='')`, digest, digest, digest, digest, digest).Scan(&references); err != nil {
 		return false, err
 	}
 	if references > 0 {
 		return false, nil
-	}
-	if err = prepare(); err != nil {
-		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE cache_jobs SET artifact_digest=NULL,artifact_size=0,content_type='' WHERE artifact_digest=? AND status IN ('succeeded','failed','cancelled')`, digest); err != nil {
 		return false, err
@@ -117,6 +130,24 @@ func (s *Store) RegisterArtifact(ctx context.Context, artifact Artifact) error {
 	}
 	if existing.SizeBytes != artifact.SizeBytes || existing.ContentType != artifact.ContentType {
 		return errors.New("artifact metadata conflicts with existing digest")
+	}
+	return s.RenewArtifactGCGrace(ctx, artifact.Digest, time.Now().UTC())
+}
+
+func (s *Store) RenewArtifactGCGrace(ctx context.Context, digest string, now time.Time) error {
+	if !artifactDigestPattern.MatchString(digest) || now.IsZero() {
+		return errors.New("artifact garbage collection grace is invalid")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE artifact_blobs SET created_at=? WHERE digest=?`, now.UTC().Unix(), digest)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return sql.ErrNoRows
 	}
 	return nil
 }

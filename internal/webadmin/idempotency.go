@@ -2,6 +2,7 @@ package webadmin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -62,8 +63,10 @@ func (a *Admin) idempotentPost(route string, next http.HandlerFunc) http.Handler
 		capture := &bufferedResponse{header: w.Header().Clone()}
 		next(capture, r)
 		if capture.status >= 200 && capture.status < 300 {
-			if err = a.store.CompleteIdempotency(r.Context(), session.User.ID, route, key, capture.status, capture.header.Get("Content-Type"), capture.header.Get("ETag"), capture.body.Bytes()); err != nil {
-				_ = a.store.ReleaseIdempotency(r.Context(), session.User.ID, route, key)
+			persistContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+			err = a.store.CompleteIdempotency(persistContext, session.User.ID, route, key, capture.status, capture.header.Get("Content-Type"), capture.header.Get("ETag"), capture.body.Bytes())
+			cancel()
+			if err != nil {
 				a.apiError(w, http.StatusInternalServerError, "idempotency_save_failed", "Ergebnis konnte nicht wiederholungssicher gespeichert werden.")
 				return
 			}

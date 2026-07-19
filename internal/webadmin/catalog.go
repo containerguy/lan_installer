@@ -116,6 +116,19 @@ const catalogPageHTML = `<!doctype html>
     <div class="empty" id="catalog-empty" hidden><strong id="catalog-empty-title">Noch keine Einträge</strong><span id="catalog-empty-text">Lege den ersten Eintrag an.</span></div>
   </section>
 
+  <section class="card assignment cache-management" id="cache-management" hidden aria-labelledby="cache-management-title" aria-busy="false">
+    <div class="section-heading"><div><p class="eyebrow">Speicher</p><h2 id="cache-management-title">Cache verwalten</h2><p>Zeigt den registrierten CAS-Verbrauch. Referenzierte Katalog- und Release-Artefakte werden bei der Bereinigung niemals entfernt.</p></div></div>
+    <div class="cache-overview">
+      <div><strong id="cache-usage">Cacheverbrauch wird geladen …</strong><p class="subtle" id="cache-usage-detail">Temporäre oder verwaiste Dateien außerhalb der Metadaten sind in diesem Wert nicht enthalten.</p></div>
+      <progress id="cache-usage-progress" max="100" value="0" aria-label="Cachebelegung in Prozent">0 %</progress>
+    </div>
+    {{if .CanDelete}}<div class="inline-form cache-gc-controls">
+      <label class="field"><span>Nur unreferenzierte Artefakte älter als</span><select class="select" id="cache-gc-age"><option value="168" selected>7 Tage</option><option value="720">30 Tage</option><option value="24">24 Stunden</option></select></label>
+      <button class="button danger" id="run-cache-gc" type="button">Unreferenzierten Cache bereinigen</button>
+    </div>{{else}}<p class="notice">Nur Administratoren dürfen unreferenzierte Cacheartefakte entfernen.</p>{{end}}
+    <p class="notice" id="cache-gc-result" role="status" aria-live="polite"></p>
+  </section>
+
   <section class="card editor" id="catalog-editor" hidden aria-labelledby="editor-title" aria-busy="false" tabindex="-1">
     <div class="editor-head">
       <div><h2 id="editor-title">Eintrag hinzufügen</h2><p id="editor-help">Pflichtfelder sind gekennzeichnet.</p></div>
@@ -203,6 +216,6 @@ const catalogPageHTML = `<!doctype html>
 </main>
 </div>
 <script src="/admin/assets/catalog-cache-helpers.js?v=20260718-1" defer></script>
-<script src="/admin/assets/catalog.js?v=20260718-7" defer></script>
+<script src="/admin/assets/catalog.js?v=20260720-1" defer></script>
 </body>
 </html>`

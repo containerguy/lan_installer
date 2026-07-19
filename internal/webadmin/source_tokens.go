@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerguy/lan_installer/internal/artifact"
 	lanrelease "github.com/containerguy/lan_installer/internal/release"
 	"github.com/containerguy/lan_installer/internal/secretbox"
 	"github.com/containerguy/lan_installer/internal/sourceprobe"
@@ -24,6 +25,8 @@ type SourceTester interface {
 type ArtifactStore interface {
 	Ingest(context.Context, string, int64, string, io.Reader) (store.Artifact, error)
 	Verify(context.Context, string, int64, string) error
+	Usage(context.Context) (int64, int64, error)
+	GarbageCollect(context.Context, time.Time, int, int64, string) (artifact.GCResult, error)
 }
 
 type Option func(*Admin)
