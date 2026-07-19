@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "demo",
+  "name": "LANReady Demo",
+  "expiresAt": "2030-12-31T23:59:59Z",
+  "mirrors": [
+    {
+      "name": "LANReady Management Server",
+      "baseUrl": "https://game-manager.familie-keller.info",
+      "priority": 10
+    }
+  ],
+  "games": [
+    {
+      "id": "demo-game",
+      "name": "Demo Game",
+      "version": "1.0.0",
+      "target": "DemoGame",
+      "description": "Kleine Testdatei für die erste Inbetriebnahme",
+      "files": [
+        {
+          "path": "readme.txt",
+          "source": "games/demo/readme.txt",
+          "size": 69,
+          "sha256": "de1fec666d3ab7f954e94251ba5b47ebda741a9384aa6f5567599fc83a0655cf"
+        }
+      ]
+    }
+  ]
+}

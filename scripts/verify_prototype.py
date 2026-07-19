@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+from html import unescape
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+rendered = Path("docs/prototypes/lanready-mvp-flows.html").read_text(encoding="utf-8")
+match = re.search(r'srcdoc="(.*)"></iframe>', rendered, re.S)
+if not match:
+    raise SystemExit("iframe srcdoc missing")
+inner = unescape(match.group(1))
+if not re.search(r'<html[^>]+lang="de"', inner):
+    raise SystemExit("inner document language is not de")
+inner = inner.replace("<script>", "<script>window.onerror=(m,s,l,c,e)=>document.documentElement.dataset.scriptError=String(m);</script><script>", 1)
+
+normal_connect = "document.querySelector('[data-product=windows]').click();const code=document.querySelector('[data-enrollment-code]');code.value='K7M4P-9Q2XR-T6V8W-3Y5ZA-BCDEFG';document.querySelector('[data-client-connect]').click();"
+scenarios = {
+    "source_create": """document.querySelector('[data-screen=sources]').click();document.querySelector('[data-source-form]').click();const name=document.querySelector('[data-source-name]');const url=document.querySelector('[data-source-url]');const destructive=[...document.querySelectorAll('[data-source-destructive]')];const blank=name.value===''&&url.value===''&&destructive.every(x=>x.hidden);name.value='Meine Quelle';name.dispatchEvent(new Event('input'));document.querySelector('[data-test-source]').click();const retained=name.value==='Meine Quelle'&&document.querySelector('[data-save-source]').disabled;url.value='https://files.example/webdav';url.dispatchEvent(new Event('input'));document.querySelector('[data-test-source]').click();queueMicrotask(()=>document.documentElement.dataset.testResult=(blank&&retained&&!document.querySelector('[data-save-source]').disabled)?'pass':'fail');""",
+    "source_edit": """document.querySelector('[data-screen=sources]').click();document.querySelector('[data-source-detail]').click();document.documentElement.dataset.testResult=(document.querySelector('[data-source-name]').value==='Nextcloud Hauptquelle'&&[...document.querySelectorAll('[data-source-destructive]')].every(x=>!x.hidden))?'pass':'fail';""",
+    "catalog_games": """document.querySelector('[data-screen=catalog]').click();document.querySelector('[data-catalog-tab=games]').click();document.querySelector('[data-catalog-add]').click();const e=document.querySelector('[data-entity-editor=games]');const blank=e.querySelector('[data-entity-required]').value===''&&[...e.querySelectorAll('[data-entity-destructive]')].every(x=>x.hidden);e.querySelector('[data-entity-cancel]').click();document.querySelector('[data-entity-edit=games]').click();document.documentElement.dataset.testResult=(blank&&e.querySelector('[data-entity-required]').value==='Counter-Strike 2'&&[...e.querySelectorAll('[data-entity-destructive]')].every(x=>!x.hidden))?'pass':'fail';""",
+    "catalog_launchers": """document.querySelector('[data-screen=catalog]').click();document.querySelector('[data-catalog-tab=launchers]').click();document.querySelector('[data-catalog-add]').click();const e=document.querySelector('[data-entity-editor=launchers]');const blank=e.querySelector('[data-entity-required]').value===''&&[...e.querySelectorAll('[data-entity-destructive]')].every(x=>x.hidden);e.querySelector('[data-entity-cancel]').click();document.querySelector('[data-entity-edit=launchers]').click();document.documentElement.dataset.testResult=(blank&&e.querySelector('[data-entity-required]').value==='Steam'&&[...e.querySelectorAll('[data-entity-destructive]')].every(x=>!x.hidden))?'pass':'fail';""",
+    "catalog_versions": """document.querySelector('[data-screen=catalog]').click();document.querySelector('[data-catalog-tab=versions]').click();document.querySelector('[data-catalog-add]').click();const e=document.querySelector('[data-entity-editor=versions]');const blank=[...e.querySelectorAll('[data-entity-required]')].every(x=>x.value==='')&&[...e.querySelectorAll('[data-entity-destructive]')].every(x=>x.hidden);e.querySelector('[data-entity-cancel]').click();document.querySelector('[data-entity-edit=versions]').click();document.querySelector('[data-catalog-panel=versions] [data-catalog-view=empty]').click();const empty=!document.querySelector('[data-catalog-panel=versions] [data-catalog-empty]').hidden;document.querySelector('[data-catalog-panel=versions] [data-catalog-view=error]').click();const error=!document.querySelector('[data-catalog-panel=versions] [data-catalog-error-state]').hidden;document.documentElement.dataset.testResult=(blank&&e.querySelector('[data-entity-required]').value==='2026.07.16'&&empty&&error)?'pass':'fail';""",
+    "publish": """document.querySelector('[data-screen=events]').click();document.querySelector('[data-validate-event]').click();document.querySelector('[data-fix-event]').click();document.querySelector('[data-validate-event]').click();document.querySelector('[data-publish-event]').click();document.querySelector('[data-publish-event]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-release-history]').hidden&&document.querySelector('[data-validation-state]').textContent.includes('Sequenz 4'))?'pass':'fail';""",
+    "enrollment_invalid": """document.querySelector('[data-product=windows]').click();document.querySelector('[data-enrollment-code]').value='UNGÜLTIG';document.querySelector('[data-client-connect]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="1"]').hidden&&document.querySelector('[data-enrollment-error]').textContent.includes('ungültig'))?'pass':'fail';""",
+    "enrollment_expired": """document.querySelector('[data-product=windows]').click();document.querySelector('[data-enrollment-code]').value='ABGELAUFEN';document.querySelector('[data-client-connect]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="1"]').hidden&&document.querySelector('[data-enrollment-error]').textContent.includes('abgelaufen'))?'pass':'fail';""",
+    "update_426": """document.querySelector('[data-product=windows]').click();document.querySelector('[data-enrollment-code]').value='UPDATE';document.querySelector('[data-client-connect]').click();document.querySelector('[data-start-signed-update]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="7"]').hidden&&document.querySelector('[data-update-state]').textContent.includes('Signatur und Digest')&&document.querySelector('[data-client-state]').textContent!=='Bereit')?'pass':'fail';""",
+    "signature_block": """document.querySelector('[data-product=windows]').click();document.querySelector('[data-enrollment-code]').value='SIGNATUR';document.querySelector('[data-client-connect]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="8"]').hidden&&document.querySelector('[data-client-state]').textContent==='Sicherheitsfehler')?'pass':'fail';""",
+    "disk_block": normal_connect + """document.querySelector('[data-disk-free]').value='40';document.querySelector('[data-review-selection]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="9"]').hidden&&document.querySelector('[data-client-state]').textContent!=='Bereit')?'pass':'fail';""",
+    "decline": normal_connect + """document.querySelector('[data-review-selection]').click();const decline=document.querySelector('[data-decline]');decline.checked=true;decline.dispatchEvent(new Event('change'));document.querySelector('[data-client-next="4"]').click();document.documentElement.dataset.testResult=(!document.querySelector('[data-client-step="6"]').hidden&&document.querySelector('[data-client-state]').textContent==='Aktion erforderlich')?'pass':'fail';""",
+    "download_resume": normal_connect + """document.querySelector('[data-review-selection]').click();document.querySelector('[data-client-next="4"]').click();document.querySelector('[data-download-interrupt]').click();const blocked=!document.querySelector('[data-client-step="10"]').hidden;document.querySelector('[data-resume-download]').click();const progress=document.querySelector('[data-client-step="4"] [role="progressbar"]').getAttribute('aria-valuenow');document.documentElement.dataset.testResult=(blocked&&!document.querySelector('[data-client-step="4"]').hidden&&progress==='38'&&document.querySelector('[data-client-state]').textContent!=='Bereit')?'pass':'fail';""",
+}
+
+for name, javascript in scenarios.items():
+    scenario = inner.replace("</body>", f"<script>{javascript}</script></body>")
+    with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False, dir="/tmp") as handle:
+        handle.write(scenario)
+        path = handle.name
+    result = subprocess.run([
+        "google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+        "--virtual-time-budget=1200", "--dump-dom", f"file://{path}"
+    ], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+    if 'data-test-result="pass"' not in result.stdout or 'data-script-error=' in result.stdout:
+        Path(f"/tmp/lanready-{name}-failed.html").write_text(result.stdout, encoding="utf-8")
+        raise SystemExit(f"{name}: failed")
+    print(f"{name}: pass")

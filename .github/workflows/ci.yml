@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+      - name: Test management UI JavaScript
+        run: make web-test
+      - run: go test ./...
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
+      - name: Build Windows client
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o LANReady.exe ./cmd/lanready
+      - name: Build Linux services
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o lanready-server ./cmd/lanready-server
+          CGO_ENABLED=0 go build -trimpath -o lanready-manifest ./cmd/lanready-manifest

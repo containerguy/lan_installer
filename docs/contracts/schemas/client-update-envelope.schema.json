@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-manager.familie-keller.info/schemas/v2/client-update-envelope.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "keyId",
+    "algorithm",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 1
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^ed25519-[0-9a-f]{16}$"
+    },
+    "algorithm": {
+      "const": "Ed25519"
+    },
+    "payload": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "maxLength": 16384
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    }
+  },
+  "$defs": {
+    "clientUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formatVersion",
+        "channel",
+        "sequence",
+        "version",
+        "minimumVersion",
+        "artifactKind",
+        "updaterProtocol",
+        "publisherCertificateSHA256",
+        "artifactPath",
+        "size",
+        "sha256",
+        "publishedAt"
+      ],
+      "properties": {
+        "formatVersion": {
+          "const": 1
+        },
+        "channel": {
+          "enum": [
+            "stable"
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "minimumVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "artifactKind": {
+          "const": "portable_exe"
+        },
+        "updaterProtocol": {
+          "const": 1
+        },
+        "publisherCertificateSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "artifactPath": {
+          "type": "string",
+          "pattern": "^/v2/client/artifacts/sha256/[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

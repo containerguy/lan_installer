@@ -1,0 +1,188 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+)
+
+type Launcher struct {
+	ID, Revision        int64
+	Slug, Name, Adapter string
+	Enabled             bool
+}
+type Source struct {
+	ID, Revision, LastTestLatencyMS int64
+	Name, Kind, BaseURL             string
+	Enabled, AuthConfigured         bool
+	LastTestState, LastTestedAt     string
+}
+type WebDAVConfig struct {
+	SourceID                      int64
+	AuthType, Username            string
+	SecretNonce, SecretCiphertext []byte
+}
+type Game struct {
+	ID, Revision, LauncherID                 int64
+	Slug, Name, LauncherName, ExternalGameID string
+	Enabled                                  bool
+}
+type LauncherVersion struct {
+	ID, Revision, LauncherID       int64
+	LauncherName, Version          string
+	SourceID                       int64
+	SourceName, SourcePath, SHA256 string
+	SilentArgs                     []string
+	SizeBytes                      int64
+	Enabled, SilentArgsVerified    bool
+}
+type GameVersion struct {
+	ID, Revision, GameID           int64
+	GameName, Version              string
+	SourceID                       int64
+	SourceName, SourcePath, SHA256 string
+	SizeBytes                      int64
+	Enabled                        bool
+}
+type Event struct {
+	ID, Revision                         int64
+	Slug, Name, StartsAt, EndsAt, Status string
+}
+type EventGame struct {
+	EventID, GameVersionID, Revision int64
+	EventName, GameName, Version     string
+	Required                         bool
+}
+
+func (s *Store) Launchers(ctx context.Context) ([]Launcher, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,slug,name,adapter,enabled FROM launchers ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]Launcher, 0)
+	for rows.Next() {
+		var v Launcher
+		if err := rows.Scan(&v.ID, &v.Revision, &v.Slug, &v.Name, &v.Adapter, &v.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) Sources(ctx context.Context) ([]Source, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT s.id,s.revision,s.name,s.kind,s.base_url,s.enabled,EXISTS(SELECT 1 FROM webdav_source_config w WHERE w.source_id=s.id AND w.auth_type='basic' AND length(w.secret_ciphertext)>0),s.last_test_state,COALESCE(s.last_tested_at,''),COALESCE(s.last_test_latency_ms,0) FROM sources s ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Source
+	for rows.Next() {
+		var v Source
+		if err := rows.Scan(&v.ID, &v.Revision, &v.Name, &v.Kind, &v.BaseURL, &v.Enabled, &v.AuthConfigured, &v.LastTestState, &v.LastTestedAt, &v.LastTestLatencyMS); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) Games(ctx context.Context) ([]Game, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.revision,g.launcher_id,g.slug,g.name,l.name,g.external_game_id,g.enabled FROM games g JOIN launchers l ON l.id=g.launcher_id ORDER BY g.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]Game, 0)
+	for rows.Next() {
+		var v Game
+		if err := rows.Scan(&v.ID, &v.Revision, &v.LauncherID, &v.Slug, &v.Name, &v.LauncherName, &v.ExternalGameID, &v.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) LauncherVersions(ctx context.Context) ([]LauncherVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id,v.revision,v.launcher_id,l.name,v.version,v.source_id,s.name,v.source_path,COALESCE(v.sha256,''),COALESCE(v.size_bytes,0),v.silent_args_json,v.silent_args_verified,v.enabled FROM launcher_versions v JOIN launchers l ON l.id=v.launcher_id JOIN sources s ON s.id=v.source_id ORDER BY l.name,v.version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]LauncherVersion, 0)
+	for rows.Next() {
+		var v LauncherVersion
+		var silentArgsJSON string
+		if err := rows.Scan(&v.ID, &v.Revision, &v.LauncherID, &v.LauncherName, &v.Version, &v.SourceID, &v.SourceName, &v.SourcePath, &v.SHA256, &v.SizeBytes, &silentArgsJSON, &v.SilentArgsVerified, &v.Enabled); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(silentArgsJSON), &v.SilentArgs); err != nil {
+			return nil, errors.New("invalid stored silent argument list")
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) GameVersions(ctx context.Context) ([]GameVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id,v.revision,v.game_id,g.name,v.version,COALESCE(v.source_id,0),COALESCE(s.name,''),v.source_path,COALESCE(v.sha256,''),COALESCE(v.size_bytes,0),v.enabled FROM game_versions v JOIN games g ON g.id=v.game_id LEFT JOIN sources s ON s.id=v.source_id ORDER BY g.name,v.version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]GameVersion, 0)
+	for rows.Next() {
+		var v GameVersion
+		if err := rows.Scan(&v.ID, &v.Revision, &v.GameID, &v.GameName, &v.Version, &v.SourceID, &v.SourceName, &v.SourcePath, &v.SHA256, &v.SizeBytes, &v.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) Events(ctx context.Context) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,slug,name,COALESCE(starts_at,''),COALESCE(ends_at,''),status FROM events ORDER BY starts_at DESC,name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]Event, 0)
+	for rows.Next() {
+		var v Event
+		if err := rows.Scan(&v.ID, &v.Revision, &v.Slug, &v.Name, &v.StartsAt, &v.EndsAt, &v.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Store) EventGames(ctx context.Context) ([]EventGame, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT eg.event_id,eg.game_version_id,eg.revision,e.name,g.name,gv.version,eg.required FROM event_games eg JOIN events e ON e.id=eg.event_id JOIN game_versions gv ON gv.id=eg.game_version_id JOIN games g ON g.id=gv.game_id ORDER BY e.name,g.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out = make([]EventGame, 0)
+	for rows.Next() {
+		var v EventGame
+		if err := rows.Scan(&v.EventID, &v.GameVersionID, &v.Revision, &v.EventName, &v.GameName, &v.Version, &v.Required); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func blank(values ...string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) WebDAVConfig(ctx context.Context, sourceID int64) (WebDAVConfig, error) {
+	var v WebDAVConfig
+	err := s.db.QueryRowContext(ctx, `SELECT source_id,auth_type,username,COALESCE(secret_nonce,X''),COALESCE(secret_ciphertext,X'') FROM webdav_source_config WHERE source_id=?`, sourceID).Scan(&v.SourceID, &v.AuthType, &v.Username, &v.SecretNonce, &v.SecretCiphertext)
+	return v, err
+}

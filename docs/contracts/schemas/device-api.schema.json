@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://game-manager.familie-keller.info/schemas/v2/device-api.schema.json",
+  "$defs": {
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "range-download",
+          "status-v1",
+          "client-update-v1"
+        ]
+      }
+    },
+    "activeEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "releaseUrl"
+      ],
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "releaseUrl": {
+          "type": "string",
+          "pattern": "^/v2/events/[a-z0-9][a-z0-9._-]{0,63}/release$"
+        }
+      }
+    },
+    "clientUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "releaseUrl"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "releaseUrl": {
+          "const": "/v2/client/releases/latest?channel=stable"
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serverTime",
+        "apiVersion",
+        "capabilities",
+        "activeEvent",
+        "clientUpdate"
+      ],
+      "properties": {
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "apiVersion": {
+          "const": 2
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "activeEvent": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/activeEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientUpdate": {
+          "$ref": "#/$defs/clientUpdate"
+        }
+      }
+    },
+    "upgradeRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "requestId",
+        "clientUpdate"
+      ],
+      "properties": {
+        "code": {
+          "const": "client_update_required"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64
+        },
+        "clientUpdate": {
+          "$ref": "#/$defs/clientUpdate"
+        }
+      }
+    },
+    "enrollmentCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "code",
+        "expiresAt",
+        "maxUses"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 64
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-HJ-NP-Z2-9]{5}(?:-[A-HJ-NP-Z2-9]{5}){3}-[A-HJ-NP-Z2-9]{6}$"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "maxUses": {
+          "const": 1
+        }
+      }
+    },
+    "enrollResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deviceId",
+        "serverTime",
+        "apiVersion",
+        "capabilities",
+        "bootstrapUrl"
+      ],
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "apiVersion": {
+          "const": 2
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "bootstrapUrl": {
+          "const": "/v2/device/bootstrap"
+        }
+      }
+    },
+    "enrollRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "publicKey",
+        "deviceName",
+        "windowsVersion",
+        "clientVersion"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-HJ-NP-Z2-9]{5}(?:-[A-HJ-NP-Z2-9]{5}){3}-[A-HJ-NP-Z2-9]{6}$"
+        },
+        "publicKey": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43,
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+          "contentEncoding": "base64url"
+        },
+        "deviceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "windowsVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "clientVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+        }
+      }
+    }
+  }
+}
