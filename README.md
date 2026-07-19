@@ -55,6 +55,36 @@ Der WebDAV-Masterschlüssel liegt ausschließlich in `secrets/webdav-master-key.
 - Private, Loopback- und Link-Local-Ziele sind für Quellentests standardmäßig gesperrt. Interne HTTPS-Ziele werden ausschließlich über `LANREADY_SOURCE_PRIVATE_ALLOWLIST=host=cidr,cidr;host=cidr` freigegeben; Hostname und CIDR müssen exakt passen.
 - Der CAS liegt im Container immer unter `/cache`. `LANREADY_CACHE_HOST_PATH` bestimmt ausschließlich den Hostpfad; bis zur NAS-Anbindung ist `./data/cache` der lokale Fallback. Das Verzeichnis muss für `LANREADY_UID:LANREADY_GID` beschreibbar sein. `LANREADY_CACHE_QUOTA_BYTES` steht übergangsweise auf 10 GiB, weil auf dem aktuellen Root-Dateisystem am 18.07.2026 nur rund 20,16 GB frei waren; nach Einbindung des NAS muss die Quota ausdrücklich angepasst werden.
 
+### Wie der Cache arbeitet
+
+LANReady ist kein transparenter Steam-/EA-/Ubisoft-Proxy. Admin oder Operator planen in der Katalog-UI einen Cache-Auftrag für eine konkrete Launcher- oder Spielversion ein. Der einzelne persistente Worker lädt die konfigurierte HTTPS-/WebDAV-Quelle seriell und wendet dabei DNS-, SSRF-, Redirect- und Credential-Regeln an. Fortschritt, Abbruch, Retry und Neustartwiederaufnahme werden in SQLite geführt; ein Neustart setzt einen unterbrochenen Download neu auf, nicht byteweise fort.
+
+Der Content-Addressed Store (CAS) schreibt zunächst eine private temporäre Datei unter `/cache/.tmp`, begrenzt den Download durch Quota und maximale Artefaktgröße, berechnet SHA-256 und prüft eine deklarierte Größe beziehungsweise Prüfsumme. Erst nach `fsync`, schreibgeschütztem Dateimodus und atomarem Rename wird das Artefakt unter `/cache/sha256/<erste-zwei-hexzeichen>/<sha256>` sichtbar und danach in SQLite registriert. Bereits vorhandene Artefakte werden vor Wiederverwendung vollständig verifiziert. Auch vor einer Clientausgabe wird Größe, regulärer Dateityp und SHA-256 erneut geprüft; Downloads unterstützen einen authentifizierten einzelnen HTTP-Range für Resume.
+
+Die Quota basiert auf den in SQLite registrierten Artefaktgrößen. Automatische Verdrängung findet derzeit nicht statt: Der transaktionale Garbage-Collection-Kern ist implementiert, aber noch nicht über UI, API oder einen Zeitplan aktiviert. Absturzreste in `.tmp` werden deshalb ebenfalls noch nicht automatisch bereinigt. Bis dieser Folgeslice abgeschlossen ist, muss ausreichend Reserve unterhalb der physischen NAS-Kapazität bleiben.
+
+### Fail-closed Netzwerk-Cache
+
+Bei einem produktiven NFS-/Netzwerkmount muss `LANREADY_CACHE_VOLUME_ID` gesetzt sein. Auf dem gemounteten Dateisystem liegt dazu eine reguläre Datei `.lanready-cache-volume`, deren getrimmter Inhalt exakt dieser ID entspricht. Fehlt der Mount, die Datei oder stimmt die ID nicht, startet der Managementserver nicht und schreibt nicht versehentlich in das lokale Mountpoint-Verzeichnis. Die administrativ gesetzten Rechte der Mountwurzel werden beim Start nicht verändert; nur die anwendungseigenen Verzeichnisse `.tmp` und `sha256` werden auf Modus 0700 gesetzt.
+
+Beispiel für einen persistenten NFSv4.2-Mount auf dem Docker-Host:
+
+```fstab
+nas.example:/mnt/pool/LANReady /mnt/lanready-cache nfs4 rw,hard,vers=4.2,proto=tcp,sec=sys,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=30s 0 0
+```
+
+Danach zeigen die nicht geheimen Umgebungswerte auf Mount und Sentinel:
+
+```dotenv
+LANREADY_CACHE_HOST_PATH=/mnt/lanready-cache
+LANREADY_CACHE_VOLUME_ID=<eindeutige-volume-id>
+LANREADY_CACHE_QUOTA_BYTES=1099511627776
+```
+
+Der Export darf bei einem aktiven Hard-Mount nicht umkonfiguriert werden. Vor Wartung Cache-Aufträge stoppen, Container beenden und den Mount aushängen; andernfalls sind längere RPC-Wartezeiten erwartbar.
+
+Auf einem Host mit rootless Docker darf die Docker-Restartpolicy nicht die einzige Bootsteuerung sein: Ein bereits erstellter Bind-Mount kann sonst das lokale Verzeichnis festhalten, wenn Docker vor NFS startet. Für das dokumentierte Ubuntu-Deployment liegt deshalb [deploy/systemd/lanready-compose.service](deploy/systemd/lanready-compose.service) bei. Der Systemdienst verlangt `/mnt/lanready-cache`, wartet bei noch nicht verfügbarem rootless Docker-Socket und erzwingt nach erfolgreichem Mount eine Container-Neuerstellung. Benutzername, UID, Socket, Arbeits- und Mountpfad müssen vor Installation zum Zielhost passen.
+
 ### 2. Signaturschlüssel erzeugen
 
 Der private Schlüssel bleibt offline und gehört weder in den Servercontainer noch auf einen öffentlichen Host.

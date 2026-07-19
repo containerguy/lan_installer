@@ -7,12 +7,135 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	lanstore "github.com/containerguy/lan_installer/internal/store"
 )
+
+func TestNewPreservesAdministrativeRootMode(t *testing.T) {
+	metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	root := filepath.Join(t.TempDir(), "mounted-cache")
+	if err = os.Mkdir(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = New(root, metadata); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Fatalf("administrative root mode changed to %o", info.Mode().Perm())
+	}
+	for _, name := range []string{".tmp", "sha256"} {
+		info, err = os.Stat(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("private directory %s: %v", name, err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("private directory %s has mode %o", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestNewRejectsSymlinkRoot(t *testing.T) {
+	metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err = os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "cache")
+	if err = os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = New(root, metadata); err == nil {
+		t.Fatal("symlink artifact root accepted")
+	}
+}
+
+func TestNewRejectsSymlinkPrivateDirectoriesWithoutChangingTarget(t *testing.T) {
+	for _, name := range []string{".tmp", "sha256"} {
+		t.Run(name, func(t *testing.T) {
+			metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer metadata.Close()
+			parent := t.TempDir()
+			root := filepath.Join(parent, "cache")
+			outside := filepath.Join(parent, "outside")
+			if err = os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Mkdir(outside, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Symlink(outside, filepath.Join(root, name)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = New(root, metadata); err == nil {
+				t.Fatalf("symlink %s accepted", name)
+			}
+			info, err := os.Stat(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o750 {
+				t.Fatalf("outside target mode changed to %o", info.Mode().Perm())
+			}
+		})
+	}
+}
+
+func TestIngestRejectsSymlinkDigestPrefixWithoutOutsideWrite(t *testing.T) {
+	metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "cache")
+	artifacts, err := New(root, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("symlink boundary payload")
+	digestBytes := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestBytes[:])
+	outside := filepath.Join(parent, "outside")
+	if err = os.Mkdir(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(outside, filepath.Join(root, "sha256", digest[:2])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = artifacts.Ingest(context.Background(), digest, int64(len(content)), "application/octet-stream", bytes.NewReader(content)); err == nil {
+		t.Fatal("symlink digest prefix accepted")
+	}
+	if _, err = os.Stat(filepath.Join(outside, digest)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("artifact escaped cache boundary: %v", err)
+	}
+	info, err := os.Stat(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Fatalf("outside target mode changed to %o", info.Mode().Perm())
+	}
+}
 
 func TestIngestAndOpenVerified(t *testing.T) {
 	metadata, err := lanstore.Open(t.TempDir() + "/metadata.db")

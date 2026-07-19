@@ -1,0 +1,23 @@
+[Unit]
+Description=LANReady management containers
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/mnt/lanready-cache
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=ubuntu
+Environment=HOME=/home/ubuntu
+Environment=DOCKER_HOST=unix:///run/user/1000/docker.sock
+WorkingDirectory=/home/ubuntu/lanready
+ExecStartPre=/usr/bin/mountpoint -q /mnt/lanready-cache
+ExecStart=/usr/bin/docker compose up -d --force-recreate --remove-orphans
+ExecStop=/usr/bin/docker compose stop
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

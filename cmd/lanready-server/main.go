@@ -37,6 +37,7 @@ func main() {
 	databasePath := flag.String("database", envOr("LANREADY_DATABASE", ""), "SQLite-Datenbank; Standard: <data>/lanready.db")
 	cacheRoot := flag.String("cache-root", os.Getenv("LANREADY_CACHE_ROOT"), "CAS-Verzeichnis; Standard: <data>/artifacts")
 	cacheQuotaBytes := flag.String("cache-quota-bytes", envOr("LANREADY_CACHE_QUOTA_BYTES", "10737418240"), "Harte Gesamtgröße des CAS in Bytes")
+	cacheVolumeID := flag.String("cache-volume-id", os.Getenv("LANREADY_CACHE_VOLUME_ID"), "Erwartete ID aus <cache-root>/.lanready-cache-volume; leer deaktiviert die Mountprüfung")
 	webAdminUser := flag.String("web-admin-user", envOr("LANREADY_WEB_ADMIN_USER", "admin"), "Initialer Web-Admin")
 	webAdminPasswordFile := flag.String("web-admin-password-file", os.Getenv("LANREADY_WEB_ADMIN_PASSWORD_FILE"), "Datei mit initialem Admin-Passwort")
 	webDAVMasterKeyFile := flag.String("webdav-master-key-file", os.Getenv("LANREADY_WEBDAV_MASTER_KEY_FILE"), "Datei mit 256-Bit-Masterschlüssel für WebDAV-Secrets")
@@ -107,6 +108,9 @@ func main() {
 		cacheQuota, err := strconv.ParseInt(strings.TrimSpace(*cacheQuotaBytes), 10, 64)
 		if err != nil || cacheQuota < 1 {
 			log.Fatal("LANREADY_CACHE_QUOTA_BYTES muss eine positive Bytegröße sein")
+		}
+		if err = verifyCacheVolume(*cacheRoot, *cacheVolumeID); err != nil {
+			log.Fatalf("Cache-Volume prüfen: %v", err)
 		}
 		artifactStore, err := artifact.NewWithQuota(*cacheRoot, database, cacheQuota)
 		if err != nil {

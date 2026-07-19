@@ -61,11 +61,11 @@ func NewWithQuota(root string, metadata *lanstore.Store, quota int64) (*Store, e
 	if err != nil {
 		return nil, err
 	}
-	for _, directory := range []string{absolute, filepath.Join(absolute, ".tmp"), filepath.Join(absolute, "sha256")} {
-		if err = os.MkdirAll(directory, 0o700); err != nil {
-			return nil, err
-		}
-		if err = os.Chmod(directory, 0o700); err != nil {
+	if err = ensureRootDirectory(absolute); err != nil {
+		return nil, err
+	}
+	for _, directory := range []string{filepath.Join(absolute, ".tmp"), filepath.Join(absolute, "sha256")} {
+		if err = ensurePrivateDirectory(directory); err != nil {
 			return nil, err
 		}
 	}
@@ -74,6 +74,56 @@ func NewWithQuota(root string, metadata *lanstore.Store, quota int64) (*Store, e
 		return nil, err
 	}
 	return s, nil
+}
+
+func ensureRootDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return validateDirectory(path, false)
+}
+
+func ensurePrivateDirectory(path string) error {
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return validateDirectory(path, true)
+}
+
+func validateDirectory(path string, private bool) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("artifact path must be a directory and not a symlink")
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	opened, err := directory.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.IsDir() || !os.SameFile(info, opened) {
+		return errors.New("artifact directory changed while it was validated")
+	}
+	if private {
+		if err = directory.Chmod(0o700); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureDigestDirectory(root, digest string) error {
+	base := filepath.Join(root, "sha256")
+	if err := validateDirectory(base, true); err != nil {
+		return err
+	}
+	return ensurePrivateDirectory(filepath.Join(base, digest[:2]))
 }
 
 func (s *Store) Ingest(ctx context.Context, digest string, size int64, contentType string, source io.Reader) (lanstore.Artifact, error) {
@@ -127,7 +177,7 @@ func (s *Store) Ingest(ctx context.Context, digest string, size int64, contentTy
 	}
 
 	destination := s.path(digest)
-	if err = os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+	if err = ensureDigestDirectory(s.root, digest); err != nil {
 		return lanstore.Artifact{}, err
 	}
 	installed := false
@@ -206,7 +256,7 @@ func (s *Store) IngestComputed(ctx context.Context, maxSize int64, contentType s
 	mutex.Lock()
 	defer mutex.Unlock()
 	destination := s.path(digest)
-	if err = os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+	if err = ensureDigestDirectory(s.root, digest); err != nil {
 		return lanstore.Artifact{}, err
 	}
 	installed := false
@@ -364,7 +414,7 @@ func (s *Store) recoverGarbageCollection(ctx context.Context) error {
 		_, metadataErr := s.metadata.Artifact(ctx, digest)
 		if metadataErr == nil {
 			destination := s.path(digest)
-			if err = os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			if err = ensureDigestDirectory(s.root, digest); err != nil {
 				return err
 			}
 			if _, destinationErr := os.Lstat(destination); errors.Is(destinationErr, os.ErrNotExist) {
