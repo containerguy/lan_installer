@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -134,6 +135,142 @@ func TestIngestRejectsSymlinkDigestPrefixWithoutOutsideWrite(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o750 {
 		t.Fatalf("outside target mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestExternalNFSStoreLifecycle(t *testing.T) {
+	root := os.Getenv("LANREADY_NFS_INTEGRATION_ROOT")
+	if root == "" {
+		t.Skip("LANREADY_NFS_INTEGRATION_ROOT is not set")
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rootInfo.IsDir() {
+		t.Fatal("integration root is not a directory")
+	}
+	databasePath := filepath.Join(t.TempDir(), "metadata.db")
+	metadata, err := lanstore.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := metadata.BootstrapAdmin(context.Background(), "nfs-integration", "integration-test-hash")
+	if err != nil || !created {
+		metadata.Close()
+		t.Fatalf("bootstrap integration actor: created=%v err=%v", created, err)
+	}
+	actor, err := metadata.UserByUsername(context.Background(), "nfs-integration")
+	if err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
+	artifacts, err := NewWithQuota(root, metadata, 1<<20)
+	if err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
+	content := []byte("LANReady NFS lifecycle " + time.Now().UTC().Format(time.RFC3339Nano))
+	digestBytes := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestBytes[:])
+	artifactPath := artifacts.path(digest)
+	defer os.Remove(artifactPath)
+	stored, err := artifacts.Ingest(context.Background(), digest, int64(len(content)), "application/octet-stream", bytes.NewReader(content))
+	if err != nil || stored.Digest != digest {
+		metadata.Close()
+		t.Fatalf("NFS ingest: stored=%#v err=%v", stored, err)
+	}
+	blob, err := artifacts.OpenVerified(context.Background(), digest)
+	if err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
+	rangeStart := int64(4)
+	rangeBuffer := make([]byte, 9)
+	if _, err = blob.File.ReadAt(rangeBuffer, rangeStart); err != nil {
+		blob.File.Close()
+		metadata.Close()
+		t.Fatal(err)
+	}
+	if !bytes.Equal(rangeBuffer, content[rangeStart:rangeStart+int64(len(rangeBuffer))]) {
+		blob.File.Close()
+		metadata.Close()
+		t.Fatalf("range read mismatch: %q", rangeBuffer)
+	}
+	if err = blob.File.Close(); err != nil {
+		metadata.Close()
+		t.Fatal(err)
+	}
+	if err = metadata.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata, err = lanstore.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	artifacts, err = NewWithQuota(root, metadata, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = artifacts.Verify(context.Background(), digest, int64(len(content)), "application/octet-stream"); err != nil {
+		t.Fatalf("verify after store restart: %v", err)
+	}
+	gc, err := artifacts.GarbageCollect(context.Background(), time.Now().UTC().Add(time.Hour), 100, actor.ID, "nfs-integration")
+	if err != nil || gc.Removed != 1 || gc.RemovedBytes != int64(len(content)) {
+		t.Fatalf("NFS garbage collection: result=%#v err=%v", gc, err)
+	}
+	if _, err = os.Stat(artifactPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("garbage-collected artifact remains: %v", err)
+	}
+	outside := t.TempDir()
+	outsideInfo, err := os.Stat(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var redirectedContent []byte
+	var redirectedDigest string
+	var prefixPath string
+	for attempt := 0; attempt < 256; attempt++ {
+		redirectedContent = []byte(fmt.Sprintf("NFS symlink boundary %d %d", time.Now().UnixNano(), attempt))
+		redirectedBytes := sha256.Sum256(redirectedContent)
+		redirectedDigest = hex.EncodeToString(redirectedBytes[:])
+		prefixPath = filepath.Join(root, "sha256", redirectedDigest[:2])
+		if _, statErr := os.Lstat(prefixPath); errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		prefixPath = ""
+	}
+	if prefixPath == "" {
+		t.Fatal("could not find an unused digest prefix for NFS symlink test")
+	}
+	if err = os.Symlink(outside, prefixPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = artifacts.Ingest(context.Background(), redirectedDigest, int64(len(redirectedContent)), "application/octet-stream", bytes.NewReader(redirectedContent)); err == nil {
+		os.Remove(prefixPath)
+		t.Fatal("NFS digest-prefix symlink accepted")
+	}
+	if err = os.Remove(prefixPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(outside, redirectedDigest)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("NFS artifact escaped cache boundary: %v", err)
+	}
+	outsideAfter, err := os.Stat(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outsideAfter.Mode().Perm() != outsideInfo.Mode().Perm() {
+		t.Fatalf("NFS symlink target mode changed from %o to %o", outsideInfo.Mode().Perm(), outsideAfter.Mode().Perm())
+	}
+	rootAfter, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rootAfter.Mode().Perm() != rootInfo.Mode().Perm() {
+		t.Fatalf("NFS root mode changed from %o to %o", rootInfo.Mode().Perm(), rootAfter.Mode().Perm())
 	}
 }
 
