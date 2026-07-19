@@ -1,6 +1,6 @@
 # LANReady – Übergabe
 
-Stand: 18.07.2026
+Stand: 19.07.2026
 
 ## Aktuelles Ziel
 
@@ -21,7 +21,7 @@ LANReady wird als selbst gehostete Plattform für LAN-Partys aufgebaut: Manageme
 
 ## MVP-Einordnung
 
-Der ausgerollte Stand ist ein technisches Fundament und Admin-Gerüst, aber nach der verbindlichen Definition in `docs/MVP_ACCEPTANCE.md` noch kein MVP. Die bisherige Kennzeichnung von UI-CRUD als abgeschlossener UI-Slice war falsch.
+Der ausgerollte Stand ist ein nutzbarer Management-/Client-Teststand, aber nach der verbindlichen Definition in `docs/MVP_ACCEPTANCE.md` noch kein vollständiges MVP: Geräte-Enrollment, persönliche Anmeldung, Launcher-Erkennung und Inventarsynchronisation sind vorhanden; die reale Installations-/Updateorchestrierung und die Windows-11-Ende-zu-Ende-Matrix fehlen noch. Die bisherige Kennzeichnung von UI-CRUD als abgeschlossenem MVP-Slice war falsch.
 
 ## Slice 0 – Gate bestanden und freigegeben
 
@@ -61,9 +61,10 @@ Der ausgerollte Stand ist ein technisches Fundament und Admin-Gerüst, aber nach
 
 ### Windows-MVP
 
-- Portabler Go-Client, signierte Ed25519-Manifeste, SHA-256-Dateiprüfung, fortsetzbare Downloads und Statusberichte.
-- Windows-x64- und Linux-Builds sind erfolgreich.
-- Portable ZIP liegt lokal unter `dist/LANReady-Windows.zip`; es muss nach Clientänderungen neu gebaut werden.
+- Gestaltete portable Wails-GUI mit Enrollment, persönlicher Browser-Anmeldung, Erkennung installierter Steam-/EA-App-/Ubisoft-Connect-Spiele, Auswahl und bestätigter Inventarsynchronisation.
+- Signierte Ed25519-Manifeste, SHA-256-Dateiprüfung, fortsetzbare Downloads und Statusberichte.
+- Der frische portable Testbuild aus Commit `dc44e6c` liegt auf dem Windows-PC unter `C:\Users\Eluminare\Downloads\LANReady-Portable-Test-dc44e6c\LANReady.exe`; SHA-256: `e8872062284113344631511eed30eb62307c3b540a94363143d938606ed9b8e0`.
+- Die Test-EXE ist absichtlich noch nicht Authenticode-signiert; SmartScreen kann deshalb warnen. Der Releasepfad bleibt ohne Zertifikat fail-closed.
 
 ## Verifikation
 
@@ -79,16 +80,26 @@ Auf `ubuntu@192.168.220.39` erfolgreich:
 
 - vollständiger Docker-Multi-Stage-Build einschließlich Tests
 - Container `lanready-server-1` healthy
-- `/healthz` und `/admin/login` öffentlich HTTP 200; `/` leitet mit HTTP 303 auf die geschützte UI weiter
-- vollständiger HTTPS-Login: POST 303, `/admin/sources` HTTP 200 und erwartete Quellenverwaltung
+- produktives Schema v6 wurde zuerst als konsistentes Onlinebackup isoliert mit dem Candidate-Image auf exakt v1–v17 migriert; `quick_check`, `foreign_key_check`, Benutzer-/Quellenzahlen sowie Login, Clients, Sources und Logout waren grün
+- `/healthz` und `/admin/login` öffentlich HTTP 200; `/admin/clients` leitet unauthentifiziert mit HTTP 303 auf die geschützte UI weiter
+- vollständiger HTTPS-Login über NPM: Clients und Quellen jeweils HTTP 200, zwei Quellen erwartet, Logout HTTP 200
+- neue Geräte-API öffentlich erreichbar: falsche GET-Methode auf `/v2/devices/enroll` HTTP 405, syntaktisch ungültiger POST HTTP 422
 - nicht persistierender Quellenprobe gegen `https://example.com`: HTTP 200, Zustand `succeeded`
 - der Zugriff vom Ubuntu-Host auf die eigene öffentliche Domain kann wegen fehlendem beziehungsweise unzuverlässigem NAT-Hairpin auslaufen; dies ist kein Containerfehler. Die öffentliche Prüfung aus dem Client-Netz und die interne Container-Health-Prüfung sind erfolgreich.
-- Datenbank und Secret jeweils Modus 0600
+- Datenbank und Secrets jeweils Modus 0600; `/cache` liegt aktuell in `./data/cache` mit Modus 0700 und 10-GiB-Quota
+- rootless Docker, read-only root filesystem, keine veröffentlichten Host-Ports, `cap_drop: ALL`, `no-new-privileges`, ausschließlich NPM-Netz `172.18.0.0/16`; der Compose-Override auf UID/GID 0 innerhalb des Rootless-Namespace bleibt ein dokumentierter P2-Härtungspunkt
 
 Rollback-Artefakte für Slice 1:
 
 - Backup: `/home/ubuntu/lanready/backups/slice1-20260716T1230`
 - Vorheriges Image: `lanready-server:pre-slice1-20260716`
+
+Rollback-Artefakte für Deployment `dc44e6c-20260719T091313Z`:
+
+- Backup: `/home/ubuntu/lanready/backups/pre-dc44e6c-20260719T091313Z`
+- Vorheriges Image: `lanready-server:rollback-dc44e6c-20260719T091313Z`
+- Geprüftes Rollback-Skript: `/home/ubuntu/lanready-deploy/dc44e6c-20260719T091313Z/upload/lanready_rollback.sh`
+- Finales Onlinebackup ist bytegenau identisch zum vorab isoliert migrierten Snapshot; SHA-256: `a7cf7e04a3c563b81a880cdea0183cac1d45a5a2a87d03544dea11b1712aa210`
 
 ## Betrieb
 
@@ -124,7 +135,7 @@ docker compose -f compose.yaml -f compose.npm.yaml up -d --build server
 
 SSO, SMB/NFS, P2P und differenzielles Chunking bleiben optionale Post-MVP-Slices.
 
-## Lokaler Fortschritt 2026-07-18 (noch nicht ausgerollt)
+## Produktiv ausgerollter Fortschritt 2026-07-19
 
 - Geräte-API v2 ist lokal implementiert: einmaliges Enrollment, Ed25519-signierte Requests, persistente Nonce-/Rate-Limit-Prüfung, Browser-Einmalcode und gerätegebundene kurzlebige Benutzertokens.
 - `/admin/clients` zeigt reale Geräte und das aktuelle authentisierte Inventar. Admins können Funde explizit zuordnen oder deaktivierte Spiel-/Versionsentwürfe erzeugen; Viewer/Operator bleiben read-only.
@@ -138,4 +149,4 @@ SSO, SMB/NFS, P2P und differenzielles Chunking bleiben optionale Post-MVP-Slices
 - `scripts/build-windows-release.ps1` ist der fail-closed Releasepfad: übereinstimmende Binär-/Windows-Dateiversion, SHA-256-Authenticode für Client/Uninstaller/Installer, RFC-3161-Zeitstempel, Windows-Policyprüfung und Zertifikatsfingerprintvergleich. Ohne Zertifikat/Fingerprint verweigert `make windows-package` die Ausgabe.
 - Die installierte Variante registriert lokal einen `LIMITED` per-user Task-Scheduler-Start. Der versteckte Agent prüft Updates alle 30 Minuten, zeigt Windows-Benachrichtigungen, öffnet bei zweitem Start die vorhandene GUI und bleibt beim Fensterschließen aktiv; ein ausdrücklicher Einstellungsbutton beendet ihn für die Sitzung. Portable Builds registrieren nichts.
 - Lokale Gates nach dem Slice: vollständige Go-Tests, `go vet`, Race Detector für Store/Webadmin/Device-API/Deviceclient und Windows-x64-Build grün. Echtes Chrome-QA der Clientseite bei 1440×1000 und 390×844 einschließlich geöffnetem Importformular ohne horizontalen Seitenüberlauf.
-- Noch nicht als MVP abgenommen: reale Windows-11-Tests der drei Launcheradapter und des Task-Scheduler-/Toast-Ablaufs, Installations-/Updateorchestrierung für Launcher/Spiele sowie ein Ende-zu-Ende-Self-Update mit öffentlich vertrauenswürdig Authenticode-signiertem und zeitgestempeltem Release. Der Produktionsserver enthält diese lokalen Änderungen noch nicht.
+- Noch nicht als MVP abgenommen: reale Windows-11-Tests der drei Launcheradapter und des Task-Scheduler-/Toast-Ablaufs, Installations-/Updateorchestrierung für Launcher/Spiele sowie ein Ende-zu-Ende-Self-Update mit öffentlich vertrauenswürdig Authenticode-signiertem und zeitgestempeltem Release. Der Produktionsserver enthält jetzt den Stand aus Commit `dc44e6c`; `LANREADY_AUTHENTICODE_PUBLISHER_SHA256` bleibt bis zu einem echten Codesigning-Zertifikat absichtlich leer, sodass Clientupdates fail-closed bleiben.
