@@ -16,7 +16,7 @@ func Discover() (Result, error) {
 	steam, warnings := discoverSteam()
 	result.Installations = append(result.Installations, steam...)
 	result.Warnings = append(result.Warnings, warnings...)
-	ea, warnings := discoverRegistryGames("ea_app", []string{`SOFTWARE\Origin Games`, `SOFTWARE\WOW6432Node\Origin Games`})
+	ea, warnings := discoverEA()
 	result.Installations = append(result.Installations, ea...)
 	result.Warnings = append(result.Warnings, warnings...)
 	ubisoft, warnings := discoverRegistryGames("ubisoft_connect", []string{`SOFTWARE\Ubisoft\Launcher\Installs`, `SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs`})
@@ -30,6 +30,193 @@ func Discover() (Result, error) {
 		return result.Installations[i].Launcher < result.Installations[j].Launcher
 	})
 	return result, nil
+}
+
+type eaRegistryCandidate struct {
+	displayName      string
+	version          string
+	installPath      string
+	gameRegistryHint bool
+}
+
+func discoverEA() ([]Installation, []string) {
+	originIDs := make(map[string]string)
+	for _, rootPath := range []string{`SOFTWARE\Origin Games`, `SOFTWARE\WOW6432Node\Origin Games`} {
+		root, err := registry.OpenKey(registry.LOCAL_MACHINE, rootPath, registry.ENUMERATE_SUB_KEYS)
+		if err != nil {
+			continue
+		}
+		names, _ := root.ReadSubKeyNames(-1)
+		root.Close()
+		for _, id := range names {
+			key, openErr := registry.OpenKey(registry.LOCAL_MACHINE, rootPath+`\`+id, registry.QUERY_VALUE)
+			if openErr != nil {
+				continue
+			}
+			originIDs[id] = firstRegistryString(key, "DisplayName", "Display Name")
+			key.Close()
+		}
+	}
+
+	candidates := make([]eaRegistryCandidate, 0)
+	for _, rootPath := range []string{`SOFTWARE\EA Games`, `SOFTWARE\WOW6432Node\EA Games`} {
+		candidates = append(candidates, readEAGameRegistryCandidates(rootPath)...)
+	}
+	for _, rootPath := range []string{
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
+		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
+	} {
+		candidates = append(candidates, readEAUninstallCandidates(rootPath)...)
+	}
+
+	candidates = mergeEARegistryCandidates(candidates)
+	installations := make([]Installation, 0, len(candidates))
+	warnings := make([]string, 0)
+	for _, candidate := range candidates {
+		if candidate.installPath == "" || isSteamInstallPath(candidate.installPath) {
+			continue
+		}
+		if !validEAInstallPath(candidate.installPath) {
+			if candidate.gameRegistryHint {
+				warnings = append(warnings, "Ein EA-Spielpfad ist nicht für die lokale Inventarisierung geeignet.")
+			}
+			continue
+		}
+		info, err := os.Stat(candidate.installPath)
+		if err != nil || !info.IsDir() {
+			if candidate.gameRegistryHint && err != nil && !os.IsNotExist(err) {
+				warnings = append(warnings, "Auf ein erkanntes EA-Spielverzeichnis konnte nicht zugegriffen werden.")
+			}
+			continue
+		}
+		version := strings.TrimSpace(candidate.version)
+		versionSource := "ea_app-registry-version"
+		manifestPath := filepath.Join(candidate.installPath, "__Installer", "installerdata.xml")
+		manifest, openErr := os.Open(manifestPath)
+		if openErr != nil {
+			if candidate.gameRegistryHint {
+				warnings = append(warnings, "Die stabile EA-Spiel-ID konnte nicht aus dem Installationsmanifest gelesen werden.")
+			}
+			continue
+		}
+		ids, manifestVersion, parseErr := parseEAInstallerManifest(manifest)
+		manifest.Close()
+		if parseErr != nil {
+			warnings = append(warnings, "Ein EA-Installationsmanifest ist ungültig; das betroffene Spiel wurde ausgelassen.")
+			continue
+		}
+		externalID, idOK := selectEAContentID(ids, originIDs)
+		if !idOK || !validEAExternalID(externalID) {
+			warnings = append(warnings, "Für ein EA-Spiel konnte keine eindeutige, zulässige Content-ID bestimmt werden.")
+			continue
+		}
+		if manifestVersion != "" {
+			version = manifestVersion
+			versionSource = "ea_app-installer-manifest"
+		}
+		if !validEAVersion(version) {
+			version = ""
+			warnings = append(warnings, "Eine EA-Spielversion war zu lang und wurde als unbekannt behandelt.")
+		}
+		displayName := strings.TrimSpace(candidate.displayName)
+		if displayName == "" {
+			displayName = filepath.Base(filepath.Clean(candidate.installPath))
+		}
+		displayName = truncateUTF8Bytes(displayName, maxInventoryDisplayNameBytes)
+		if displayName == "" {
+			warnings = append(warnings, "Ein EA-Spiel ohne gültigen Anzeigenamen wurde ausgelassen.")
+			continue
+		}
+		var detectedVersion *string
+		if version != "" {
+			detectedVersion = &version
+		} else {
+			versionSource = "ea_app-version-unavailable"
+		}
+		installations = append(installations, Installation{
+			Launcher:        "ea_app",
+			ExternalGameID:  externalID,
+			DisplayName:     displayName,
+			DetectedVersion: detectedVersion,
+			VersionSource:   versionSource,
+			InstallPath:     filepath.Clean(candidate.installPath),
+		})
+	}
+	return installations, warnings
+}
+
+func mergeEARegistryCandidates(values []eaRegistryCandidate) []eaRegistryCandidate {
+	out := make([]eaRegistryCandidate, 0, len(values))
+	byPath := make(map[string]int)
+	for _, value := range values {
+		if strings.TrimSpace(value.installPath) == "" {
+			continue
+		}
+		key := strings.ToLower(filepath.Clean(value.installPath))
+		if index, ok := byPath[key]; ok {
+			current := &out[index]
+			if current.displayName == "" {
+				current.displayName = value.displayName
+			}
+			if current.version == "" {
+				current.version = value.version
+			}
+			current.gameRegistryHint = current.gameRegistryHint || value.gameRegistryHint
+			continue
+		}
+		byPath[key] = len(out)
+		out = append(out, value)
+	}
+	return out
+}
+
+func readEAGameRegistryCandidates(rootPath string) []eaRegistryCandidate {
+	root, err := registry.OpenKey(registry.LOCAL_MACHINE, rootPath, registry.ENUMERATE_SUB_KEYS)
+	if err != nil {
+		return nil
+	}
+	names, _ := root.ReadSubKeyNames(-1)
+	root.Close()
+	out := make([]eaRegistryCandidate, 0, len(names))
+	for _, name := range names {
+		key, openErr := registry.OpenKey(registry.LOCAL_MACHINE, rootPath+`\`+name, registry.QUERY_VALUE)
+		if openErr != nil {
+			continue
+		}
+		out = append(out, eaRegistryCandidate{
+			displayName:      firstRegistryString(key, "DisplayName", "Display Name"),
+			installPath:      firstRegistryString(key, "InstallDir", "Install Dir", "InstallLocation"),
+			gameRegistryHint: true,
+		})
+		key.Close()
+	}
+	return out
+}
+
+func readEAUninstallCandidates(rootPath string) []eaRegistryCandidate {
+	root, err := registry.OpenKey(registry.LOCAL_MACHINE, rootPath, registry.ENUMERATE_SUB_KEYS)
+	if err != nil {
+		return nil
+	}
+	names, _ := root.ReadSubKeyNames(-1)
+	root.Close()
+	out := make([]eaRegistryCandidate, 0)
+	for _, name := range names {
+		key, openErr := registry.OpenKey(registry.LOCAL_MACHINE, rootPath+`\`+name, registry.QUERY_VALUE)
+		if openErr != nil {
+			continue
+		}
+		publisher := strings.ToLower(firstRegistryString(key, "Publisher"))
+		displayName := firstRegistryString(key, "DisplayName", "Display Name")
+		installPath := firstRegistryString(key, "InstallLocation", "Install Dir", "InstallDir")
+		version := firstRegistryString(key, "DisplayVersion", "Version")
+		key.Close()
+		if !strings.Contains(publisher, "electronic arts") || strings.EqualFold(strings.TrimSpace(displayName), "EA app") || installPath == "" {
+			continue
+		}
+		out = append(out, eaRegistryCandidate{displayName: displayName, version: version, installPath: installPath})
+	}
+	return out
 }
 
 func discoverSteam() ([]Installation, []string) {
