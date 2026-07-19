@@ -9,11 +9,12 @@ Type=oneshot
 RemainAfterExit=yes
 User=ubuntu
 Environment=HOME=/home/ubuntu
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DOCKER_HOST=unix:///run/user/1000/docker.sock
 WorkingDirectory=/home/ubuntu/lanready
 ExecStartPre=/usr/bin/mountpoint -q /mnt/lanready-cache
-ExecStart=/usr/bin/docker compose up -d --force-recreate --remove-orphans
-ExecStop=/usr/bin/docker compose stop
+ExecStart=/usr/bin/docker compose -f compose.yaml -f compose.npm.yaml up -d --force-recreate --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.yaml -f compose.npm.yaml stop
 Restart=on-failure
 RestartSec=10s
 TimeoutStartSec=10min
