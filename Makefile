@@ -18,11 +18,13 @@ test: docs-check web-test
 web-test:
 	node --check internal/webadmin/assets/catalog.js
 	node --check internal/webadmin/assets/catalog_cache_helpers.js
+	node --check internal/webadmin/assets/catalog_assignment_helpers.js
 	node --check internal/webadmin/assets/clients.js
 	node --check internal/webadmin/assets/sources.js
 	node --check cmd/lanready-gui/frontend/dist/app.js
 	node --check cmd/lanready-gui/frontend/dist/readiness.js
 	node --test internal/webadmin/assets/catalog_cache_helpers.test.js
+	node --test internal/webadmin/assets/catalog_assignment_helpers.test.js
 	node --test cmd/lanready-gui/frontend/dist/readiness.test.js
 	node --test cmd/lanready-gui/frontend/dist/frontend_contract.test.js
 

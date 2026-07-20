@@ -177,7 +177,7 @@ const catalogPageHTML = `<!doctype html>
       <label class="field"><span>Event</span><select class="select" id="assignment-event"></select></label>
       <label class="field"><span>Spielversion</span><select class="select" id="assignment-version"></select></label>
       <label class="check"><input id="assignment-required" type="checkbox" checked> erforderlich</label>
-      <button class="button primary" type="submit">Zuordnen</button>
+      <button class="button primary" id="assignment-submit" type="submit">Zuordnen</button>
     </form>{{end}}
     <div id="assignment-list" class="assignment-list"></div>
   </section>
@@ -217,6 +217,7 @@ const catalogPageHTML = `<!doctype html>
 </main>
 </div>
 <script src="/admin/assets/catalog-cache-helpers.js?v=20260718-1" defer></script>
-<script src="/admin/assets/catalog.js?v=20260720-1" defer></script>
+<script src="/admin/assets/catalog-assignment-helpers.js?v=20260720-1" defer></script>
+<script src="/admin/assets/catalog.js?v=20260720-2" defer></script>
 </body>
 </html>`

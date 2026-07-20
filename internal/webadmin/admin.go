@@ -52,6 +52,7 @@ func New(st *store.Store, secureCookies bool, vault *secretbox.Box, options ...O
 	a.mux.HandleFunc("GET /admin/assets/sources.js", sourcesJSAsset)
 	a.mux.HandleFunc("GET /admin/assets/catalog.js", catalogJSAsset)
 	a.mux.HandleFunc("GET /admin/assets/catalog-cache-helpers.js", catalogCacheHelpersJSAsset)
+	a.mux.HandleFunc("GET /admin/assets/catalog-assignment-helpers.js", catalogAssignmentHelpersJSAsset)
 	a.mux.HandleFunc("GET /admin/assets/clients.js", clientsJSAsset)
 	a.mux.HandleFunc("POST /admin/login", a.login)
 	a.mux.HandleFunc("POST /admin/logout", a.requireLogin(a.logout))

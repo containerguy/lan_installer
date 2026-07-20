@@ -7,6 +7,8 @@ WORKDIR /src
 COPY internal/webadmin/assets/catalog.js ./internal/webadmin/assets/catalog.js
 COPY internal/webadmin/assets/catalog_cache_helpers.js ./internal/webadmin/assets/catalog_cache_helpers.js
 COPY internal/webadmin/assets/catalog_cache_helpers.test.js ./internal/webadmin/assets/catalog_cache_helpers.test.js
+COPY internal/webadmin/assets/catalog_assignment_helpers.js ./internal/webadmin/assets/catalog_assignment_helpers.js
+COPY internal/webadmin/assets/catalog_assignment_helpers.test.js ./internal/webadmin/assets/catalog_assignment_helpers.test.js
 COPY internal/webadmin/assets/clients.js ./internal/webadmin/assets/clients.js
 COPY internal/webadmin/assets/sources.js ./internal/webadmin/assets/sources.js
 COPY cmd/lanready-gui/frontend/dist/app.js ./cmd/lanready-gui/frontend/dist/app.js
@@ -16,11 +18,13 @@ COPY cmd/lanready-gui/frontend/dist/frontend_contract.test.js ./cmd/lanready-gui
 COPY cmd/lanready-gui/frontend/dist/index.html ./cmd/lanready-gui/frontend/dist/index.html
 RUN node --check internal/webadmin/assets/catalog.js
 RUN node --check internal/webadmin/assets/catalog_cache_helpers.js
+RUN node --check internal/webadmin/assets/catalog_assignment_helpers.js
 RUN node --check internal/webadmin/assets/clients.js
 RUN node --check internal/webadmin/assets/sources.js
 RUN node --check cmd/lanready-gui/frontend/dist/app.js
 RUN node --check cmd/lanready-gui/frontend/dist/readiness.js
 RUN node --test internal/webadmin/assets/catalog_cache_helpers.test.js
+RUN node --test internal/webadmin/assets/catalog_assignment_helpers.test.js
 RUN node --test cmd/lanready-gui/frontend/dist/readiness.test.js
 RUN node --test cmd/lanready-gui/frontend/dist/frontend_contract.test.js
 RUN touch /web-test-ok

@@ -342,7 +342,7 @@ func TestCatalogAPIStrictJSONCSRFAndPageAssets(t *testing.T) {
 		response = httptest.NewRecorder()
 		admin.ServeHTTP(response, request)
 		body := response.Body.String()
-		if response.Code != http.StatusOK || !strings.Contains(body, "/admin/assets/management.css") || !strings.Contains(body, "/admin/assets/catalog.js") {
+		if response.Code != http.StatusOK || !strings.Contains(body, "/admin/assets/management.css") || !strings.Contains(body, "/admin/assets/catalog-assignment-helpers.js") || !strings.Contains(body, "/admin/assets/catalog.js") {
 			t.Fatalf("catalog page %s: %d %s", path, response.Code, body)
 		}
 		if strings.Contains(body, "<style") || strings.Contains(body, "<script>") {
@@ -401,6 +401,18 @@ func TestCatalogAPIStrictJSONCSRFAndPageAssets(t *testing.T) {
 
 	if strings.Contains(catalogAsset, "silentArgs:") || strings.Contains(catalogAsset, "silentArgsVerified:") {
 		t.Fatal("catalog UI sends server-owned silent argument fields")
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/admin/assets/catalog-assignment-helpers.js", nil)
+	response = httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("catalog assignment helper headers: %d %#v", response.Code, response.Header())
+	}
+	for _, fragment := range []string{"availableVersions", "retainedID", "GameVersionID"} {
+		if !strings.Contains(response.Body.String(), fragment) {
+			t.Fatalf("catalog assignment helper missing: %s", fragment)
+		}
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/admin/assets/management.css", nil)

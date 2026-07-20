@@ -8,6 +8,7 @@
   const canPublish = document.querySelector('meta[name="can-publish"]').content === "true";
   const initialTab = document.querySelector('meta[name="initial-tab"]').content;
 	const cacheHelpers = window.LANReadyCatalogCache;
+  const assignmentHelpers = window.LANReadyCatalogAssignments;
   const validTabs = ["games", "launchers", "launcher-versions", "game-versions", "events"];
   const state = { data: null, tab: validTabs.includes(initialTab) ? initialTab : "games", selected: null, opener: null, dirty: false, busy: false, entityKey: "", deactivateKey: "", assignmentKey: "", releaseKey: "", releaseEnvelope: null, releasePayload: null, releaseStatus: null, updateKey: "", updateEnvelope: null, updatePayload: null, updateArtifactReady: false, cacheStatus: null, cacheMutationKeys: {}, cachePollTimer: 0, disabledControls: [] };
 
@@ -502,8 +503,18 @@
     const sourceOptions = launcherManaged ? [{ ID: 0, Name: "Über " + launcher.Name + " beziehen · kein LANReady-Paket", Kind: "launcher", Enabled: true }].concat(packageSources) : packageSources;
     populateSelect(byId("entity-source"), sourceOptions, (entry) => entry.ID === 0 ? entry.Name : parentLabel(entry, entry.Name + " · " + entry.Kind, enabled), item.SourceID);
     updateGameVersionDeliveryFields(game, launcher);
-    populateSelect(byId("assignment-event"), state.data.events.filter((entry) => entry.Status === "draft"), (entry) => entry.Name, 0);
-    populateSelect(byId("assignment-version"), state.data.gameVersions.filter(enabled), (entry) => entry.GameName + " · " + entry.Version, 0);
+  }
+
+  function refreshAssignmentSelects() {
+    if (!state.data || !byId("assignment-event") || !byId("assignment-version")) return;
+    const events = state.data.events.filter((entry) => entry.Status === "draft");
+    const eventID = assignmentHelpers.retainedID(events, intValue("assignment-event"));
+    populateSelect(byId("assignment-event"), events, (entry) => entry.Name, eventID);
+    const versions = assignmentHelpers.availableVersions(state.data.gameVersions, state.data.eventGames, eventID);
+    const versionID = assignmentHelpers.retainedID(versions, intValue("assignment-version"));
+    populateSelect(byId("assignment-version"), versions, (entry) => entry.GameName + " · " + entry.Version, versionID);
+    const submit = byId("assignment-submit");
+    if (submit) submit.disabled = !assignmentHelpers.canSubmit(eventID, versionID);
   }
 
   function updateGameVersionDeliveryFields(game, launcher) {
@@ -798,7 +809,7 @@
 
   function renderAssignments() {
     if (!state.data || state.tab !== "events") return;
-    refreshSelects();
+    refreshAssignmentSelects();
     const list = byId("assignment-list");
     list.replaceChildren();
     if (!state.data.eventGames.length) {
@@ -846,7 +857,7 @@
     } catch (error) {
       showPageMessage(errorText(error), "error");
     } finally {
-      if (button) button.disabled = false;
+      if (button) button.disabled = !assignmentHelpers.canSubmit(intValue("assignment-event"), intValue("assignment-version"));
       byId("event-assignment").setAttribute("aria-busy", "false");
     }
   }
@@ -1393,6 +1404,7 @@
   byId("delete-entity")?.addEventListener("click", deleteEntity);
   byId("run-cache-gc")?.addEventListener("click", runCacheGarbageCollection);
   byId("assignment-form")?.addEventListener("submit", saveAssignment);
+  byId("assignment-event")?.addEventListener("change", refreshAssignmentSelects);
   byId("assignment-form")?.addEventListener("input", () => { state.assignmentKey = ""; });
   byId("assignment-form")?.addEventListener("change", () => { state.assignmentKey = ""; });
   if (canPublish) {
