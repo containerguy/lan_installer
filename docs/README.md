@@ -10,6 +10,7 @@ Diese Seite ist der Einstieg für Betrieb, Administration und Nutzung. `handover
 | Betreiber | [Backup und Restore](backup-restore.md) | Sicherungsumfang, konsistente Sicherung, Wiederherstellung, Rollback und Restore-Test |
 | Administratoren und Teilnehmer | [Benutzerhandbuch](user-guide.md) | Web-UI, Quellen, Katalog, Clients, Inventar und Windows-GUI |
 | Entwickler und Abnahme | [MVP-Abnahmekriterien](MVP_ACCEPTANCE.md) | verbindlicher Funktions- und Qualitätsumfang |
+| Neue Arbeitssession | [Session Memory](../SESSION_MEMORY.md) | kompakter secretsfreier Produktionsstand, Entscheidungen und nächste Schritte |
 | Entwickler | [Architekturentscheidungen](architecture/) | Managementbasis und Secret-Speicherung |
 | Entwickler | [API- und Domänenverträge](contracts/README.md) | API v1/v2, Rollen, Schemas und Windows-Komponenten |
 

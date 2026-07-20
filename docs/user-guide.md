@@ -119,7 +119,26 @@ Mehrfachübernahme:
 
 Die Operation ist atomar: Ist ein Eintrag veraltet oder ungültig, wird nichts aus der Auswahl gespeichert. Eine wiederholte Übertragung nach unklarer Netzantwort ist idempotent. Standalone-Funde werden ausschließlich ihrem bereits existierenden Katalogspiel zugeordnet und erzeugen keine Duplikate.
 
-## 10. Events und Bereitschaft
+## 10. Signiertes Event-Release veröffentlichen
+
+Die Eventzuordnung allein wird noch nicht an Clients ausgeliefert. Der aktuelle Stand besitzt noch keinen Generator, der aus Katalog und Zuordnungen automatisch einen initialen `event-release.json`-Kandidaten baut. Ein Payload für vollständig im CAS vorhandene Pakete wird deshalb entsprechend dem verbindlichen Schema manuell erstellt, im netzwerklosen Signer signiert und direkt wieder geprüft:
+
+```bash
+docker compose --profile tools run --rm signer sign-event \
+  -in event-release.json \
+  -out event-envelope.json \
+  -private-key release-private.key
+
+docker compose --profile tools run --rm signer verify-event \
+  -in event-envelope.json \
+  -public-key release-public.key
+```
+
+Danach unter **Events → Signiertes Event-Release veröffentlichen** ausschließlich `event-envelope.json` auswählen, Vorschau und Key-ID prüfen und entscheiden, ob die neue Sequenz sofort aktiviert werden soll. Der Server prüft Signatur, Key-ID, Schema, Event-ID, monotone Sequenz, Gültigkeitsfenster und alle CAS-Referenzen atomar. Bei einem Fehler wird nichts veröffentlicht oder aktiviert.
+
+Bekannter P1-Blocker: Das derzeitige Release-Schema verlangt für jedes Spiel mindestens ein Artefakt-Payload. Eine über Steam, EA App oder Ubisoft Connect geführte Version ohne eigenes LANReady-Paket kann daher noch nicht sinnvoll veröffentlicht werden, obwohl sie im Katalog einem Event zugeordnet werden darf. Keine Dummy-Artefakte eintragen. Dieser Vertragskonflikt und der fehlende Kandidatengenerator müssen vor der MVP-Abnahme geschlossen werden.
+
+## 11. Events und Bereitschaft
 
 Ein Event ordnet konkrete Spielversionen als erforderlich oder optional zu. Nur aktive und konsistente Abhängigkeiten können zugeordnet werden. Der Windows-Client zeigt das aktive signierte Event, erforderliche Launcher/Spiele und lokale Versionsabweichungen.
 
@@ -132,7 +151,7 @@ Statusbeispiele:
 
 Der reale Installations-/Updateknopf für Launcher-Spiele ist noch nicht implementiert. Ein Eventstatus ist daher derzeit eine verifizierte Inventar-/Bereitschaftsanzeige, keine Garantie, dass LANReady das Spiel selbst installieren kann.
 
-## 11. Portable und installierte Variante
+## 12. Portable und installierte Variante
 
 Portable Variante:
 
@@ -149,7 +168,7 @@ Installierte Variante:
 
 Vor dem Start einer neuen portablen EXE eine alte Instanz vollständig beenden, weil der Single-Instance-Schutz sonst das alte Fenster aktiviert.
 
-## 12. Häufige Probleme
+## 13. Häufige Probleme
 
 ### Die neue EXE verlangt erneut einen Code
 
@@ -176,7 +195,7 @@ Fehlercode in der Katalog-UI lesen, NAS-Mount und freien Speicher prüfen, Senti
 
 Im Client erneut nach Spielen suchen und Inventar synchronisieren. Danach Eventstatus neu laden. Prüfen, ob im Event genau die erkannte Katalogversion zugeordnet und aktiviert ist.
 
-## 13. Hilfeinformationen für Fehlermeldungen
+## 14. Hilfeinformationen für Fehlermeldungen
 
 Bei einer Störungsmeldung niemals Tokens, Passwörter, WebDAV-Secrets oder private Schlüssel mitsenden. Hilfreich sind:
 

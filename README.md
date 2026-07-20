@@ -11,6 +11,7 @@ LANReady speichert keine Launcher-Zugangsdaten und umgeht weder DRM noch Lizenzp
 - [Backup, Restore und Rollback](docs/backup-restore.md)
 - [Benutzerhandbuch für Web-UI und Windows-Client](docs/user-guide.md)
 - [MVP-Abnahmekriterien](docs/MVP_ACCEPTANCE.md)
+- [Kompakter Übergabestand für neue Sessions](SESSION_MEMORY.md)
 
 Die README bietet Schnellstart und technische Referenz. Für produktive Installation, Wiederherstellung und tägliche Bedienung sind die verlinkten Handbücher verbindlich.
 
@@ -258,7 +259,9 @@ chmod 600 release-work/release-private.key
 
 Der Private Key benötigt ein verschlüsseltes, offline geprüftes Backup. Sein Verlust verhindert neue Releases; sein Bekanntwerden erfordert eine dokumentierte Schlüsselrotation. Der Public Key wird über `LANREADY_RELEASE_PUBLIC_KEY_FILE` als Docker Secret ausschließlich lesbar in den Server gemountet.
 
-Ein Event-Payload wird ohne Netzwerkzugriff signiert und anschließend noch einmal lokal gegen Schema, Semantik und Signatur geprüft:
+Ein Event-Payload wird ohne Netzwerkzugriff signiert und anschließend noch einmal lokal gegen Schema, Semantik und Signatur geprüft. Der aktuelle Stand erzeugt einen initialen `event-release.json`-Kandidaten noch nicht aus Katalog und Eventzuordnungen; er muss daher manuell entsprechend [event-release-envelope.schema.json](docs/contracts/schemas/event-release-envelope.schema.json) erstellt werden.
+
+Bekannter P1-Blocker: Das Schema verlangt derzeit für jedes Spiel mindestens ein Artefakt-Payload. Eine im Katalog zulässige, ausschließlich über Steam/EA/Ubisoft bezogene Version ohne eigenes LANReady-Paket kann deshalb noch nicht sinnvoll als signiertes Event veröffentlicht werden. Keine Dummy-/Fake-Artefakte verwenden; Kandidatengenerator und Provider-only-Vertrag müssen gemeinsam korrigiert werden.
 
 ```bash
 docker compose --profile tools run --rm signer sign-event \
