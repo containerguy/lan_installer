@@ -6,10 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 )
+
+const maxProfileSize = 2 << 20
 
 // PreflightProfile verifies the CurrentUser key protection and the target
 // directory before a one-time server enrollment code is consumed.
@@ -47,6 +50,7 @@ type Profile struct {
 	ServerURL, DeviceID, DeviceName, ClientVersion string
 	PrivateKey                                     ed25519.PrivateKey `json:"-"`
 	UpdateSequence                                 int64              `json:"-"`
+	EventSequences                                 map[string]int64   `json:"-"`
 }
 
 type storedProfile struct {
@@ -55,12 +59,13 @@ type storedProfile struct {
 }
 
 type profilePayload struct {
-	ServerURL      string `json:"serverUrl"`
-	DeviceID       string `json:"deviceId"`
-	DeviceName     string `json:"deviceName"`
-	ClientVersion  string `json:"clientVersion"`
-	PrivateKey     string `json:"privateKey"`
-	UpdateSequence int64  `json:"updateSequence"`
+	ServerURL      string           `json:"serverUrl"`
+	DeviceID       string           `json:"deviceId"`
+	DeviceName     string           `json:"deviceName"`
+	ClientVersion  string           `json:"clientVersion"`
+	PrivateKey     string           `json:"privateKey"`
+	UpdateSequence int64            `json:"updateSequence"`
+	EventSequences map[string]int64 `json:"eventSequences,omitempty"`
 }
 
 func SaveProfile(path string, profile Profile) error {
@@ -70,7 +75,7 @@ func SaveProfile(path string, profile Profile) error {
 	if err := validateProfile(profile); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(profilePayload{ServerURL: profile.ServerURL, DeviceID: profile.DeviceID, DeviceName: profile.DeviceName, ClientVersion: profile.ClientVersion, PrivateKey: base64.RawStdEncoding.EncodeToString(profile.PrivateKey), UpdateSequence: profile.UpdateSequence})
+	payload, err := json.Marshal(profilePayload{ServerURL: profile.ServerURL, DeviceID: profile.DeviceID, DeviceName: profile.DeviceName, ClientVersion: profile.ClientVersion, PrivateKey: base64.RawStdEncoding.EncodeToString(profile.PrivateKey), UpdateSequence: profile.UpdateSequence, EventSequences: profile.EventSequences})
 	if err != nil {
 		return err
 	}
@@ -82,25 +87,47 @@ func SaveProfile(path string, profile Profile) error {
 	if err != nil {
 		return err
 	}
+	if len(encoded) >= maxProfileSize {
+		return errors.New("protected device profile is too large; existing profile was not changed")
+	}
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	temporary := path + ".tmp"
-	if err = os.WriteFile(temporary, encoded, 0o600); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), ".lanready-device-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err = os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err = file.Chmod(0o600); err == nil {
+		_, err = file.Write(encoded)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	if closeErr != nil {
+		return closeErr
+	}
+	return replaceProfileFile(temporary, path)
 }
 
 func LoadProfile(path string) (Profile, error) {
 	var out Profile
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return out, err
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxProfileSize))
+	if err != nil {
+		return out, err
+	}
+	if len(content) == maxProfileSize {
+		return out, errors.New("device profile is too large")
 	}
 	var stored storedProfile
 	if err = json.Unmarshal(content, &stored); err != nil {
@@ -125,7 +152,7 @@ func LoadProfile(path string) (Profile, error) {
 	if err != nil {
 		return out, errors.New("protected device key is invalid")
 	}
-	out = Profile{ServerURL: payload.ServerURL, DeviceID: payload.DeviceID, DeviceName: payload.DeviceName, ClientVersion: payload.ClientVersion, PrivateKey: ed25519.PrivateKey(privateKey), UpdateSequence: payload.UpdateSequence}
+	out = Profile{ServerURL: payload.ServerURL, DeviceID: payload.DeviceID, DeviceName: payload.DeviceName, ClientVersion: payload.ClientVersion, PrivateKey: ed25519.PrivateKey(privateKey), UpdateSequence: payload.UpdateSequence, EventSequences: payload.EventSequences}
 	if err = validateProfile(out); err != nil {
 		return Profile{}, errors.New("protected device profile fields are invalid")
 	}
@@ -139,6 +166,11 @@ func validateProfile(profile Profile) error {
 	}
 	if profile.DeviceID == "" || len(profile.DeviceID) > 128 || profile.DeviceName == "" || len(profile.DeviceName) > 128 || profile.ClientVersion == "" || len(profile.ClientVersion) > 64 || len(profile.PrivateKey) != ed25519.PrivateKeySize || profile.UpdateSequence < 0 {
 		return errors.New("complete device profile is required")
+	}
+	for eventID, sequence := range profile.EventSequences {
+		if !eventIDPattern.MatchString(eventID) || sequence < 1 {
+			return errors.New("protected event sequence watermark is invalid")
+		}
 	}
 	return nil
 }

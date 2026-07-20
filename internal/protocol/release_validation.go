@@ -93,6 +93,46 @@ func NewReleaseValidator(schemaDirectory string) (*ReleaseValidator, error) {
 	return validator, nil
 }
 
+// NewReleaseValidatorFromJSON compiles the canonical release schemas from
+// embedded JSON documents. Portable clients use this path because they cannot
+// rely on loose schema files beside the executable.
+func NewReleaseValidatorFromJSON(eventSchema, updateSchema []byte) (*ReleaseValidator, error) {
+	if len(eventSchema) == 0 || len(updateSchema) == 0 {
+		return nil, errors.New("release schema documents are required")
+	}
+	eventDocument, err := decodeReleaseJSON(eventSchema)
+	if err != nil {
+		return nil, fmt.Errorf("decode embedded event schema: %w", err)
+	}
+	updateDocument, err := decodeReleaseJSON(updateSchema)
+	if err != nil {
+		return nil, fmt.Errorf("decode embedded client update schema: %w", err)
+	}
+	const eventURL = "https://game-manager.familie-keller.info/schemas/v2/event-release-envelope.schema.json"
+	const updateURL = "https://game-manager.familie-keller.info/schemas/v2/client-update-envelope.schema.json"
+	compiler := jsonschema.NewCompiler()
+	if err = compiler.AddResource(eventURL, eventDocument); err != nil {
+		return nil, fmt.Errorf("add embedded event schema: %w", err)
+	}
+	if err = compiler.AddResource(updateURL, updateDocument); err != nil {
+		return nil, fmt.Errorf("add embedded client update schema: %w", err)
+	}
+	validator := &ReleaseValidator{}
+	if validator.eventEnvelope, err = compiler.Compile(eventURL); err != nil {
+		return nil, fmt.Errorf("compile embedded event envelope schema: %w", err)
+	}
+	if validator.eventPayload, err = compiler.Compile(eventURL + "#/$defs/eventRelease"); err != nil {
+		return nil, fmt.Errorf("compile embedded event release schema: %w", err)
+	}
+	if validator.updateEnvelope, err = compiler.Compile(updateURL); err != nil {
+		return nil, fmt.Errorf("compile embedded client update envelope schema: %w", err)
+	}
+	if validator.updatePayload, err = compiler.Compile(updateURL + "#/$defs/clientUpdate"); err != nil {
+		return nil, fmt.Errorf("compile embedded client update schema: %w", err)
+	}
+	return validator, nil
+}
+
 func SignEnvelope(payload []byte, privateKey ed25519.PrivateKey) (Envelope, error) {
 	if len(privateKey) != ed25519.PrivateKeySize || len(payload) == 0 || !json.Valid(payload) {
 		return Envelope{}, errors.New("release payload or private key is invalid")

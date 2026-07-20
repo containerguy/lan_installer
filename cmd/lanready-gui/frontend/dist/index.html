@@ -6,7 +6,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'">
   <title>LANReady</title>
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="readiness.css">
   <link rel="stylesheet" href="accessibility.css">
+  <script defer src="readiness.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -49,9 +51,18 @@
           </div>
           <div class="readiness" aria-label="Bereitschaftsstatus">
             <div class="readiness-ring"><div><strong id="ready-number">—</strong></div></div>
-            <p>Event-Bereitschaft</p>
+            <p id="ready-label">Event-Bereitschaft</p>
           </div>
         </div>
+
+        <article id="event-readiness-panel" class="panel event-readiness-panel tone-neutral" aria-labelledby="event-readiness-title">
+          <div class="event-readiness-heading">
+            <div><p class="eyebrow">SIGNIERTER EVENTSTAND</p><h3 id="event-readiness-title">Noch kein signiertes Event aktiviert</h3></div>
+            <span id="event-readiness-badge" class="readiness-badge">Kein aktives Event</span>
+          </div>
+          <p id="event-readiness-message">Ein Katalogeintrag allein verändert die Event-Bereitschaft nicht. Ein Event muss veröffentlicht und ausdrücklich aktiviert werden.</p>
+          <div id="event-readiness-components" class="event-readiness-components hidden" aria-label="Event-Komponenten"></div>
+        </article>
 
         <div class="stats-grid">
           <article class="stat-card"><div class="stat-icon purple">◈</div><div><span>Gefundene Spiele</span><strong id="stat-games">—</strong><small id="stat-games-note">Noch nicht gesucht</small></div></article>

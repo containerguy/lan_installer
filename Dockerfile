@@ -8,10 +8,19 @@ COPY internal/webadmin/assets/catalog.js ./internal/webadmin/assets/catalog.js
 COPY internal/webadmin/assets/catalog_cache_helpers.js ./internal/webadmin/assets/catalog_cache_helpers.js
 COPY internal/webadmin/assets/catalog_cache_helpers.test.js ./internal/webadmin/assets/catalog_cache_helpers.test.js
 COPY internal/webadmin/assets/sources.js ./internal/webadmin/assets/sources.js
+COPY cmd/lanready-gui/frontend/dist/app.js ./cmd/lanready-gui/frontend/dist/app.js
+COPY cmd/lanready-gui/frontend/dist/readiness.js ./cmd/lanready-gui/frontend/dist/readiness.js
+COPY cmd/lanready-gui/frontend/dist/readiness.test.js ./cmd/lanready-gui/frontend/dist/readiness.test.js
+COPY cmd/lanready-gui/frontend/dist/frontend_contract.test.js ./cmd/lanready-gui/frontend/dist/frontend_contract.test.js
+COPY cmd/lanready-gui/frontend/dist/index.html ./cmd/lanready-gui/frontend/dist/index.html
 RUN node --check internal/webadmin/assets/catalog.js
 RUN node --check internal/webadmin/assets/catalog_cache_helpers.js
 RUN node --check internal/webadmin/assets/sources.js
+RUN node --check cmd/lanready-gui/frontend/dist/app.js
+RUN node --check cmd/lanready-gui/frontend/dist/readiness.js
 RUN node --test internal/webadmin/assets/catalog_cache_helpers.test.js
+RUN node --test cmd/lanready-gui/frontend/dist/readiness.test.js
+RUN node --test cmd/lanready-gui/frontend/dist/frontend_contract.test.js
 RUN touch /web-test-ok
 
 FROM golang:${GO_VERSION}-alpine3.24 AS build

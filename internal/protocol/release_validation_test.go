@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	contractschemas "github.com/containerguy/lan_installer/docs/contracts/schemas"
 )
 
 func testReleaseValidator(t *testing.T) *ReleaseValidator {
@@ -20,6 +22,21 @@ func testReleaseValidator(t *testing.T) *ReleaseValidator {
 		t.Fatal(err)
 	}
 	return validator
+}
+
+func TestEmbeddedReleaseSchemasMatchRuntimeValidation(t *testing.T) {
+	validator, err := NewReleaseValidatorFromJSON(contractschemas.EventReleaseEnvelope, contractschemas.ClientUpdateEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, trusted := signedReleaseJSON(t, []byte(validEventRelease), privateKey)
+	if _, payload, metadata, validateErr := validator.ValidateEventEnvelope(raw, trusted); validateErr != nil || string(payload) != validEventRelease || metadata.EventID != "kellerlan-2026" {
+		t.Fatalf("embedded event validation: %q %#v %v", payload, metadata, validateErr)
+	}
 }
 
 func signedReleaseJSON(t *testing.T, payload []byte, privateKey ed25519.PrivateKey) ([]byte, map[string]ed25519.PublicKey) {

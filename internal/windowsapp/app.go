@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	contractschemas "github.com/containerguy/lan_installer/docs/contracts/schemas"
 	"github.com/containerguy/lan_installer/internal/deviceclient"
 	"github.com/containerguy/lan_installer/internal/discovery"
 	"github.com/containerguy/lan_installer/internal/protocol"
@@ -54,24 +56,68 @@ type App struct {
 	updateOpMu              sync.Mutex
 	updateCancel            context.CancelFunc
 	updateProgress          UpdateProgress
+	releaseValidator        *protocol.ReleaseValidator
+	releaseValidatorErr     error
+	discoveryMu             sync.Mutex
+	discoveryRun            *discoveryRun
+	stateTimeout            time.Duration
+	discoveryTimeout        time.Duration
 	pollMu                  sync.Mutex
 	pollAuthorizationID     string
 	pollCancel              context.CancelFunc
 }
 
+type discoveryRun struct {
+	done   chan struct{}
+	result discovery.Result
+	err    error
+}
+
 type State struct {
-	Connected        bool   `json:"connected"`
-	ServerURL        string `json:"serverUrl"`
-	DeviceID         string `json:"deviceId,omitempty"`
-	DeviceName       string `json:"deviceName,omitempty"`
-	ClientVersion    string `json:"clientVersion"`
-	ServerReachable  bool   `json:"serverReachable"`
-	ServerWarning    string `json:"serverWarning,omitempty"`
-	UpdateRequired   bool   `json:"updateRequired"`
-	UpdateAvailable  bool   `json:"updateAvailable"`
-	UpdateVersion    string `json:"updateVersion,omitempty"`
-	AgentMode        bool   `json:"agentMode"`
-	UpdateReleaseURL string `json:"updateReleaseUrl,omitempty"`
+	Connected        bool           `json:"connected"`
+	ServerURL        string         `json:"serverUrl"`
+	DeviceID         string         `json:"deviceId,omitempty"`
+	DeviceName       string         `json:"deviceName,omitempty"`
+	ClientVersion    string         `json:"clientVersion"`
+	ServerReachable  bool           `json:"serverReachable"`
+	ServerWarning    string         `json:"serverWarning,omitempty"`
+	UpdateRequired   bool           `json:"updateRequired"`
+	UpdateAvailable  bool           `json:"updateAvailable"`
+	UpdateVersion    string         `json:"updateVersion,omitempty"`
+	AgentMode        bool           `json:"agentMode"`
+	UpdateReleaseURL string         `json:"updateReleaseUrl,omitempty"`
+	EventReadiness   EventReadiness `json:"eventReadiness"`
+}
+
+type EventReadiness struct {
+	State         string                   `json:"state"`
+	EventID       string                   `json:"eventId,omitempty"`
+	ReleaseID     string                   `json:"releaseId,omitempty"`
+	Sequence      int64                    `json:"sequence,omitempty"`
+	RequiredGames int                      `json:"requiredGames"`
+	ReadyGames    int                      `json:"readyGames"`
+	Percentage    int                      `json:"percentage"`
+	Message       string                   `json:"message"`
+	Launchers     []EventLauncherReadiness `json:"launchers,omitempty"`
+	Games         []EventGameReadiness     `json:"games,omitempty"`
+}
+
+type EventLauncherReadiness struct {
+	Launcher        string `json:"launcher"`
+	RequiredVersion string `json:"requiredVersion"`
+	Required        bool   `json:"required"`
+	Status          string `json:"status"`
+}
+
+type EventGameReadiness struct {
+	GameID          string `json:"gameId"`
+	Name            string `json:"name"`
+	Launcher        string `json:"launcher"`
+	ExternalGameID  string `json:"externalGameId,omitempty"`
+	RequiredVersion string `json:"requiredVersion"`
+	DetectedVersion string `json:"detectedVersion,omitempty"`
+	Required        bool   `json:"required"`
+	Status          string `json:"status"`
 }
 
 type EnrollmentInput struct {
@@ -118,7 +164,8 @@ func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
 			keyring[protocol.KeyID(key)] = append(ed25519.PublicKey(nil), key...)
 		}
 	}
-	return &App{profilePath: profilePath, version: version, discover: discovery.Discover, trustedReleaseKeys: keyring, healthReady: make(chan struct{})}
+	validator, validatorErr := protocol.NewReleaseValidatorFromJSON(contractschemas.EventReleaseEnvelope, contractschemas.ClientUpdateEnvelope)
+	return &App{profilePath: profilePath, version: version, discover: discovery.Discover, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
 }
 
 func (a *App) SetHealthRequest(request selfupdate.HealthRequest) { a.healthRequest = &request }
@@ -196,7 +243,7 @@ func (a *App) State() (State, error) {
 		return State{}, fmt.Errorf("Geräteprofil für Serverstatus laden: %w", err)
 	}
 	profile.ClientVersion = a.version
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), a.stateTimeout)
 	defer cancel()
 	bootstrap, bootstrapErr := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).Bootstrap(ctx, a.version)
 	if bootstrapErr != nil {
@@ -230,6 +277,12 @@ func (a *App) State() (State, error) {
 			}
 		}
 	}
+	if !state.UpdateRequired {
+		state.EventReadiness = a.loadEventReadiness(ctx, profile, bootstrap.ActiveEvent)
+		if state.EventReadiness.State == "security_error" || state.EventReadiness.State == "error" {
+			state.ServerWarning = state.EventReadiness.Message
+		}
+	}
 	a.opMu.Lock()
 	a.serverReady = true
 	a.updateRequired = bootstrap.ClientUpdate.Required
@@ -242,7 +295,7 @@ func (a *App) State() (State, error) {
 }
 
 func (a *App) state() (State, error) {
-	state := State{ServerURL: DefaultServerURL, ClientVersion: a.version, AgentMode: a.agentMode}
+	state := State{ServerURL: DefaultServerURL, ClientVersion: a.version, AgentMode: a.agentMode, EventReadiness: noActiveEventReadiness()}
 	profile, err := deviceclient.LoadProfile(a.profilePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
@@ -410,14 +463,20 @@ func (a *App) CancelUpdate() bool {
 
 func (a *App) Discover() (discovery.Result, error) {
 	a.opMu.Lock()
-	defer a.opMu.Unlock()
 	if _, err := a.connectedProfile(); err != nil {
+		a.opMu.Unlock()
 		return discovery.Result{}, err
 	}
 	if err := a.requireReadyLocked(); err != nil {
+		a.opMu.Unlock()
 		return discovery.Result{}, err
 	}
-	result, err := a.discover()
+	generation := a.discoveryGeneration
+	a.opMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.discoveryTimeout)
+	defer cancel()
+	result, err := a.runDiscovery(ctx)
 	if err != nil {
 		return discovery.Result{}, fmt.Errorf("installierte Spiele erkennen: %w", err)
 	}
@@ -431,6 +490,17 @@ func (a *App) Discover() (discovery.Result, error) {
 		}
 		return left.InstallPath < right.InstallPath
 	})
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	if _, err = a.connectedProfile(); err != nil {
+		return discovery.Result{}, err
+	}
+	if err = a.requireReadyLocked(); err != nil {
+		return discovery.Result{}, err
+	}
+	if generation != a.discoveryGeneration {
+		return discovery.Result{}, errors.New("der Verbindungs- oder Inventarstatus hat sich während der Erkennung geändert; bitte erneut suchen")
+	}
 	copyResult := cloneResult(result)
 	a.discoveryGeneration++
 	a.lastDiscovery = &copyResult
@@ -588,6 +658,200 @@ func (a *App) requireReadyLocked() error {
 		return errors.New("der Managementserver-Status wurde noch nicht erfolgreich geprüft; bitte den Verbindungsstatus erneut laden")
 	}
 	return nil
+}
+
+func noActiveEventReadiness() EventReadiness {
+	return EventReadiness{State: "none", Message: "Kein aktives Event. Ein Katalogeintrag allein verändert die Event-Bereitschaft nicht."}
+}
+
+func eventReadinessError(state, message string) EventReadiness {
+	return EventReadiness{State: state, Message: message}
+}
+
+func (a *App) loadEventReadiness(ctx context.Context, profile deviceclient.Profile, active *deviceclient.ActiveEvent) EventReadiness {
+	if active == nil {
+		return noActiveEventReadiness()
+	}
+	if a.releaseValidatorErr != nil || a.releaseValidator == nil {
+		return eventReadinessError("security_error", "Die eingebetteten Event-Prüfregeln sind ungültig. Event-Bereitschaft bleibt aus Sicherheitsgründen blockiert.")
+	}
+	if len(a.trustedReleaseKeys) == 0 {
+		return eventReadinessError("security_error", "Dieser Client enthält keinen vertrauenswürdigen Event-Signaturschlüssel.")
+	}
+	raw, err := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).EventRelease(ctx, active.EventID, active.ReleaseURL)
+	if err != nil {
+		return eventReadinessError("error", "Das aktive Event konnte nicht sicher geladen werden: "+err.Error())
+	}
+	_, payload, metadata, err := a.releaseValidator.ValidateEventEnvelope(raw, a.trustedReleaseKeys)
+	if err != nil {
+		return eventReadinessError("security_error", "Das aktive Event hat die Signatur- oder Vertragsprüfung nicht bestanden.")
+	}
+	if metadata.EventID != active.EventID {
+		return eventReadinessError("security_error", "Event-ID und signiertes Release stimmen nicht überein.")
+	}
+	now := time.Now().UTC()
+	if now.Before(metadata.IssuedAt) || !now.Before(metadata.ValidUntil) {
+		return eventReadinessError("security_error", "Das signierte Event ist noch nicht gültig oder bereits abgelaufen.")
+	}
+	comparison, versionErr := protocol.CompareSemanticVersions(a.version, metadata.MinimumClientVersion)
+	if versionErr != nil || comparison < 0 {
+		return eventReadinessError("security_error", "Für dieses Event ist eine neuere signierte LANReady-Version erforderlich.")
+	}
+	if err = a.persistEventSequence(active.EventID, metadata.Sequence); err != nil {
+		return eventReadinessError("security_error", err.Error())
+	}
+	var release struct {
+		Games []struct {
+			GameID, Name, LauncherID, ExternalGameID, Version string
+			Required                                          bool
+		} `json:"games"`
+		Launchers []struct {
+			LauncherID, Version string
+			Required            bool
+		} `json:"launchers"`
+	}
+	if err = json.Unmarshal(payload, &release); err != nil {
+		return eventReadinessError("security_error", "Das signierte Eventpayload konnte nicht ausgewertet werden.")
+	}
+	local, err := a.runDiscovery(ctx)
+	if err != nil {
+		return eventReadinessError("error", "Installierte Spiele konnten für die Event-Bereitschaft nicht geprüft werden: "+err.Error())
+	}
+	readiness := EventReadiness{State: "action_required", EventID: metadata.EventID, ReleaseID: metadata.ReleaseID, Sequence: metadata.Sequence}
+	readyRequiredGames := 0
+	for _, game := range release.Games {
+		item := EventGameReadiness{GameID: game.GameID, Name: game.Name, Launcher: game.LauncherID, ExternalGameID: game.ExternalGameID, RequiredVersion: game.Version, Required: game.Required, Status: "missing"}
+		if game.ExternalGameID == "" {
+			item.Status = "unidentifiable"
+		} else {
+			item.Status, item.DetectedVersion = matchEventGame(local.Installations, releaseLauncherAdapter(game.LauncherID), game.ExternalGameID, game.Version)
+		}
+		if game.Required {
+			readiness.RequiredGames++
+			if item.Status == "ready" {
+				readiness.ReadyGames++
+				readyRequiredGames++
+			}
+		}
+		readiness.Games = append(readiness.Games, item)
+	}
+	requiredLaunchers, presentRequiredLaunchers := 0, 0
+	for _, launcher := range release.Launchers {
+		adapter := releaseLauncherAdapter(launcher.LauncherID)
+		item := EventLauncherReadiness{Launcher: launcher.LauncherID, RequiredVersion: launcher.Version, Required: launcher.Required, Status: "not_detected"}
+		for _, installation := range local.Installations {
+			if installation.Launcher == adapter {
+				item.Status = "detected_version_unverified"
+				break
+			}
+		}
+		if launcher.Required {
+			requiredLaunchers++
+			if item.Status == "detected_version_unverified" {
+				presentRequiredLaunchers++
+			}
+		}
+		readiness.Launchers = append(readiness.Launchers, item)
+	}
+	requiredComponents := readiness.RequiredGames + requiredLaunchers
+	readyComponents := readyRequiredGames + presentRequiredLaunchers
+	if requiredComponents == 0 {
+		readiness.Percentage = 100
+	} else {
+		readiness.Percentage = readyComponents * 100 / requiredComponents
+	}
+	switch {
+	case readyRequiredGames < readiness.RequiredGames || presentRequiredLaunchers < requiredLaunchers:
+		readiness.State = "action_required"
+		readiness.Message = fmt.Sprintf("%d von %d erforderlichen Komponenten sind lokal vorhanden. Spielversionen müssen exakt passen.", readyComponents, requiredComponents)
+	case requiredLaunchers > 0:
+		readiness.State = "warning"
+		readiness.Message = "Alle erforderlichen Spiele passen. Die installierten Launcher wurden erkannt; ihre genaue Version ist noch nicht unabhängig verifiziert."
+	default:
+		readiness.State = "ready"
+		readiness.Message = "Alle erforderlichen Spiele sind in der signierten Eventversion vorhanden."
+	}
+	return readiness
+}
+
+func matchEventGame(installations []discovery.Installation, launcher, externalGameID, requiredVersion string) (string, string) {
+	status, detectedVersion, rank := "missing", "", 0
+	for _, installation := range installations {
+		if installation.Launcher != launcher || installation.ExternalGameID != externalGameID {
+			continue
+		}
+		candidateVersion := ""
+		if installation.DetectedVersion != nil {
+			candidateVersion = *installation.DetectedVersion
+		}
+		candidateStatus, candidateRank := "version_unknown", 1
+		if candidateVersion != "" {
+			candidateStatus, candidateRank = "version_mismatch", 2
+		}
+		if candidateVersion == requiredVersion {
+			return "ready", candidateVersion
+		}
+		if candidateRank > rank {
+			status, detectedVersion, rank = candidateStatus, candidateVersion, candidateRank
+		}
+	}
+	return status, detectedVersion
+}
+
+func releaseLauncherAdapter(value string) string {
+	return map[string]string{"steam": "steam", "ea-app": "ea_app", "ubisoft-connect": "ubisoft_connect"}[value]
+}
+
+func (a *App) persistEventSequence(eventID string, sequence int64) error {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	profile, err := deviceclient.LoadProfile(a.profilePath)
+	if err != nil {
+		return errors.New("Der geschützte Event-Sequenzstand konnte nicht geladen werden.")
+	}
+	current := profile.EventSequences[eventID]
+	if sequence < current {
+		return errors.New("Ein älterer signierter Eventstand wurde aus Sicherheitsgründen abgelehnt.")
+	}
+	if sequence == current {
+		return nil
+	}
+	sequences := make(map[string]int64, len(profile.EventSequences)+1)
+	for key, value := range profile.EventSequences {
+		sequences[key] = value
+	}
+	sequences[eventID] = sequence
+	profile.EventSequences = sequences
+	if err = deviceclient.SaveProfile(a.profilePath, profile); err != nil {
+		return errors.New("Der geschützte Event-Sequenzstand konnte nicht gespeichert werden.")
+	}
+	return nil
+}
+
+func (a *App) runDiscovery(ctx context.Context) (discovery.Result, error) {
+	a.discoveryMu.Lock()
+	run := a.discoveryRun
+	if run == nil {
+		run = &discoveryRun{done: make(chan struct{})}
+		a.discoveryRun = run
+		go func(current *discoveryRun) {
+			current.result, current.err = a.discover()
+			a.discoveryMu.Lock()
+			if a.discoveryRun == current {
+				a.discoveryRun = nil
+			}
+			close(current.done)
+			a.discoveryMu.Unlock()
+		}(run)
+	}
+	a.discoveryMu.Unlock()
+
+	select {
+	case <-run.done:
+		return cloneResult(run.result), run.err
+	case <-ctx.Done():
+		return discovery.Result{}, fmt.Errorf("Erkennung hat das Zeitlimit überschritten: %w", ctx.Err())
+	}
 }
 
 func (a *App) clearSessionLocked() {

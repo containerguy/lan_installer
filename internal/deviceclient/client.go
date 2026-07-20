@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 var (
 	ErrAuthorizationPending  = errors.New("authorization pending")
 	ErrAuthorizationSlowDown = errors.New("authorization polling too fast")
+	eventIDPattern           = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
 type Client struct {
@@ -38,12 +41,14 @@ type Authorization struct {
 	PollIntervalSeconds int       `json:"pollIntervalSeconds"`
 }
 
+type ActiveEvent struct {
+	EventID    string `json:"eventId"`
+	ReleaseURL string `json:"releaseUrl"`
+}
+
 type Bootstrap struct {
-	APIVersion  int `json:"apiVersion"`
-	ActiveEvent *struct {
-		EventID    string `json:"eventId"`
-		ReleaseURL string `json:"releaseUrl"`
-	} `json:"activeEvent"`
+	APIVersion   int          `json:"apiVersion"`
+	ActiveEvent  *ActiveEvent `json:"activeEvent"`
 	ClientUpdate struct {
 		Required   bool   `json:"required"`
 		ReleaseURL string `json:"releaseUrl"`
@@ -151,6 +156,44 @@ func (c *Client) Bootstrap(ctx context.Context, runtimeVersion string) (Bootstra
 	}
 	c.Profile.ClientVersion = runtimeVersion
 	return out, nil
+}
+
+// EventRelease downloads the signed envelope advertised by bootstrap. The
+// path is reconstructed from the event ID instead of accepting an arbitrary
+// server-provided URL, and signed device requests are never redirected.
+func (c *Client) EventRelease(ctx context.Context, eventID, releaseURL string) ([]byte, error) {
+	if !eventIDPattern.MatchString(eventID) {
+		return nil, errors.New("active event ID is invalid")
+	}
+	expectedPath := "/v2/events/" + eventID + "/release"
+	if releaseURL != expectedPath {
+		return nil, errors.New("active event release path is invalid")
+	}
+	request, err := c.signedRequest(ctx, http.MethodGet, expectedPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := httpClient(c.HTTP).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, responseError(response)
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return nil, errors.New("event release content type is invalid")
+	}
+	const maximum = 950 << 10
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) == 0 || len(content) > maximum {
+		return nil, errors.New("event release size is invalid")
+	}
+	return content, nil
 }
 
 func (c *Client) StartAuthorization(ctx context.Context) (Authorization, error) {

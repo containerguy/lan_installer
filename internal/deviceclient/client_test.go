@@ -1,9 +1,11 @@
 package deviceclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,81 @@ import (
 	"github.com/containerguy/lan_installer/internal/discovery"
 	"github.com/containerguy/lan_installer/internal/store"
 )
+
+func deviceTestProfile(t *testing.T, serverURL string) Profile {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Profile{ServerURL: serverURL, DeviceID: "device", DeviceName: "PC", ClientVersion: "1.0.0", PrivateKey: privateKey}
+}
+
+func TestEventReleaseUsesCanonicalSignedPathAndLimitsResponse(t *testing.T) {
+	t.Parallel()
+	payload := []byte(`{"formatVersion":1}`)
+	requestSeen := make(chan [3]string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestSeen <- [3]string{r.Method, r.URL.Path, r.Header.Get("LANReady-Signature")}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	client := &Client{Profile: deviceTestProfile(t, server.URL), HTTP: server.Client()}
+	got, err := client.EventRelease(t.Context(), "lan-2026", "/v2/events/lan-2026/release")
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("event release: %q %v", got, err)
+	}
+	seen := <-requestSeen
+	if seen[0] != http.MethodGet || seen[1] != "/v2/events/lan-2026/release" || seen[2] == "" {
+		t.Fatalf("unexpected event request: %#v", seen)
+	}
+	for _, test := range []struct{ eventID, releaseURL string }{
+		{eventID: "../admin", releaseURL: "/v2/events/../admin/release"},
+		{eventID: "lan-2026", releaseURL: "https://evil.example/release"},
+		{eventID: "lan-2026", releaseURL: "/v2/events/other/release"},
+	} {
+		if _, err = client.EventRelease(t.Context(), test.eventID, test.releaseURL); err == nil {
+			t.Fatalf("unsafe release location accepted: %#v", test)
+		}
+	}
+}
+
+func TestEventReleaseRejectsRedirectMediaTypeAndOversize(t *testing.T) {
+	t.Parallel()
+	targetHits := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer target.Close()
+	responses := []func(http.ResponseWriter){
+		func(w http.ResponseWriter) {
+			w.Header().Set("Location", target.URL)
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		},
+		func(w http.ResponseWriter) { w.Header().Set("Content-Type", "text/html"); _, _ = w.Write([]byte(`{}`)) },
+		func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(bytes.Repeat([]byte("x"), (950<<10)+1))
+		},
+	}
+	for index, response := range responses {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { response(w) }))
+		client := &Client{Profile: deviceTestProfile(t, server.URL), HTTP: server.Client()}
+		if _, err := client.EventRelease(t.Context(), "lan-2026", "/v2/events/lan-2026/release"); err == nil {
+			server.Close()
+			t.Fatalf("invalid response %d accepted", index)
+		}
+		server.Close()
+	}
+	select {
+	case <-targetHits:
+		t.Fatal("signed event request followed a redirect")
+	default:
+	}
+}
 
 func TestSignedClientNeverFollowsRedirects(t *testing.T) {
 	t.Parallel()
@@ -75,6 +152,71 @@ func TestProfileProtectsMetadataAndRejectsInvalidEnvelope(t *testing.T) {
 	}
 	if _, err = LoadProfile(path); err == nil {
 		t.Fatal("invalid protected profile was accepted")
+	}
+}
+
+func TestProfileProtectsEventSequenceWatermarks(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "device.json")
+	profile := deviceTestProfile(t, "https://manager.example")
+	profile.EventSequences = map[string]int64{"lan-2026": 7}
+	if err := SaveProfile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadProfile(path)
+	if err != nil || loaded.EventSequences["lan-2026"] != 7 {
+		t.Fatalf("watermarks: %#v %v", loaded.EventSequences, err)
+	}
+	profile.EventSequences = map[string]int64{"../invalid": 1}
+	if err = SaveProfile(path, profile); err == nil {
+		t.Fatal("invalid event watermark was accepted")
+	}
+}
+
+func TestProfileDurablyReplacesWatermarksAcrossRestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "device.json")
+	profile := deviceTestProfile(t, "https://manager.example")
+	profile.EventSequences = map[string]int64{"lan-2026": 7}
+	if err := SaveProfile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	first, err := LoadProfile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.EventSequences["lan-2026"] = 8
+	if err = SaveProfile(path, first); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := LoadProfile(path)
+	if err != nil || restarted.EventSequences["lan-2026"] != 8 {
+		t.Fatalf("restarted profile: %#v %v", restarted, err)
+	}
+	temporary, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".lanready-device-*.tmp"))
+	if err != nil || len(temporary) != 0 {
+		t.Fatalf("temporary profiles remain: %v %v", temporary, err)
+	}
+}
+
+func TestOversizedWatermarksNeverReplaceReadableProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device.json")
+	profile := deviceTestProfile(t, "https://manager.example")
+	profile.EventSequences = map[string]int64{"existing-event": 7}
+	if err := SaveProfile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	tooMany := make(map[string]int64, 100000)
+	for index := 0; index < 100000; index++ {
+		tooMany[fmt.Sprintf("event-%06d", index)] = 1
+	}
+	profile.EventSequences = tooMany
+	if err := SaveProfile(path, profile); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("oversized profile was not rejected before replace: %v", err)
+	}
+	loaded, err := LoadProfile(path)
+	if err != nil || loaded.EventSequences["existing-event"] != 7 || len(loaded.EventSequences) != 1 {
+		t.Fatalf("existing profile changed after rejected save: %#v %v", loaded.EventSequences, err)
 	}
 }
 

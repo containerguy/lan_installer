@@ -4,17 +4,39 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/containerguy/lan_installer/internal/deviceapi"
 	"github.com/containerguy/lan_installer/internal/deviceclient"
 	"github.com/containerguy/lan_installer/internal/discovery"
+	"github.com/containerguy/lan_installer/internal/protocol"
 	"github.com/containerguy/lan_installer/internal/store"
 )
+
+func signedEventReadinessEnvelope(t *testing.T, privateKey ed25519.PrivateKey, sequence int64) []byte {
+	t.Helper()
+	now := time.Now().UTC()
+	digest := "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	payload := []byte(fmt.Sprintf(`{"formatVersion":2,"eventId":"lan-2026","releaseId":"01K0LANREADY00000000000002","sequence":%d,"issuedAt":%q,"validUntil":%q,"minimumClientVersion":"1.0.0","artifacts":[{"digest":%q,"size":42,"mediaType":"application/zip","fileName":"cs2.zip"}],"launchers":[{"launcherId":"steam","version":"current","required":true,"actions":[{"adapter":"steam","operation":"verify","artifactDigest":%q}]}],"games":[{"gameId":"cs2","name":"Counter-Strike 2","launcherId":"steam","externalGameId":"730","version":"200","required":true,"payloads":[{"type":"archive","artifacts":[%q],"actions":[{"adapter":"lanready_archive","operation":"verify","artifactDigest":%q}]}]}]}`,
+		sequence, now.Add(-time.Minute).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339), digest, digest, digest, digest))
+	envelope, err := protocol.SignEnvelope(payload, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
 
 type blockingTransport struct{ started chan struct{} }
 
@@ -109,6 +131,135 @@ func TestStateWithoutProfileIsDisconnected(t *testing.T) {
 	}
 	if state.Connected || state.ServerURL != DefaultServerURL || state.ClientVersion != "1.2.3" {
 		t.Fatalf("unexpected state: %#v", state)
+	}
+}
+
+func TestStateVerifiesActiveEventAndRejectsRollback(t *testing.T) {
+	publicKey, releasePrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var releaseMu sync.RWMutex
+	releaseEnvelope := signedEventReadinessEnvelope(t, releasePrivateKey, 2)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/device/bootstrap":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"apiVersion":2,"activeEvent":{"eventId":"lan-2026","releaseUrl":"/v2/events/lan-2026/release"},"clientUpdate":{"required":false,"releaseUrl":"/v2/client/releases/latest?channel=stable"}}`))
+		case r.URL.Path == "/v2/events/lan-2026/release":
+			releaseMu.RLock()
+			current := append([]byte(nil), releaseEnvelope...)
+			releaseMu.RUnlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(current)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":"not_found","message":"not found"}`))
+		}
+	}))
+	defer server.Close()
+	_, devicePrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "device.json")
+	if err = deviceclient.SaveProfile(profilePath, deviceclient.Profile{ServerURL: server.URL, DeviceID: "device", DeviceName: "PC", ClientVersion: "1.0.0", PrivateKey: devicePrivateKey}); err != nil {
+		t.Fatal(err)
+	}
+	version := "200"
+	app := New(profilePath, "1.0.0", publicKey)
+	app.httpClient = server.Client()
+	app.discover = func() (discovery.Result, error) {
+		return discovery.Result{Installations: []discovery.Installation{{Launcher: "steam", ExternalGameID: "730", DisplayName: "Counter-Strike 2", DetectedVersion: &version}}}, nil
+	}
+	state, err := app.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := state.EventReadiness
+	if readiness.State != "warning" || readiness.Percentage != 100 || readiness.ReadyGames != 1 || len(readiness.Games) != 1 || readiness.Games[0].Status != "ready" || len(readiness.Launchers) != 1 || readiness.Launchers[0].Status != "detected_version_unverified" {
+		t.Fatalf("readiness: %#v", readiness)
+	}
+	stored, err := deviceclient.LoadProfile(profilePath)
+	if err != nil || stored.EventSequences["lan-2026"] != 2 {
+		t.Fatalf("event watermark: %#v %v", stored.EventSequences, err)
+	}
+	releaseMu.Lock()
+	releaseEnvelope = signedEventReadinessEnvelope(t, releasePrivateKey, 1)
+	releaseMu.Unlock()
+	state, err = app.State()
+	if err != nil || state.EventReadiness.State != "security_error" || !strings.Contains(state.EventReadiness.Message, "älterer signierter Eventstand") {
+		t.Fatalf("rollback state: %#v %v", state.EventReadiness, err)
+	}
+
+	releaseMu.Lock()
+	releaseEnvelope = signedEventReadinessEnvelope(t, releasePrivateKey, 3)
+	releaseMu.Unlock()
+	blocked := make(chan struct{})
+	app.discover = func() (discovery.Result, error) {
+		<-blocked
+		return discovery.Result{}, nil
+	}
+	app.stateTimeout = 50 * time.Millisecond
+	app.discoveryTimeout = 50 * time.Millisecond
+	started := time.Now()
+	state, err = app.State()
+	if err != nil || time.Since(started) > 500*time.Millisecond || state.EventReadiness.State != "error" || !strings.Contains(state.EventReadiness.Message, "Zeitlimit") {
+		t.Fatalf("bounded readiness discovery: %#v elapsed=%s err=%v", state.EventReadiness, time.Since(started), err)
+	}
+	started = time.Now()
+	if _, err = app.Discover(); err == nil || time.Since(started) > 500*time.Millisecond || !strings.Contains(err.Error(), "Zeitlimit") {
+		t.Fatalf("bounded manual discovery: elapsed=%s err=%v", time.Since(started), err)
+	}
+	close(blocked)
+	if _, err = app.Discover(); err != nil {
+		t.Fatalf("discovery mutex remained blocked after timeout: %v", err)
+	}
+}
+
+func TestMatchEventGamePrefersExactVersionDeterministically(t *testing.T) {
+	t.Parallel()
+	unknown, old, exact := "", "100", "200"
+	installations := []discovery.Installation{
+		{Launcher: "steam", ExternalGameID: "730", DetectedVersion: &unknown},
+		{Launcher: "steam", ExternalGameID: "730", DetectedVersion: &old},
+		{Launcher: "steam", ExternalGameID: "730", DetectedVersion: &exact},
+	}
+	status, detected := matchEventGame(installations, "steam", "730", "200")
+	if status != "ready" || detected != "200" {
+		t.Fatalf("match: %s %q", status, detected)
+	}
+	status, detected = matchEventGame(installations[:2], "steam", "730", "200")
+	if status != "version_mismatch" || detected != "100" {
+		t.Fatalf("fallback match: %s %q", status, detected)
+	}
+}
+
+func TestEventWatermarksNeverEvictOlderEventIDs(t *testing.T) {
+	t.Parallel()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequences := make(map[string]int64, 128)
+	for index := 0; index < 128; index++ {
+		sequences[fmt.Sprintf("event-%03d", index)] = 10
+	}
+	profilePath := filepath.Join(t.TempDir(), "device.json")
+	if err = deviceclient.SaveProfile(profilePath, deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "device", DeviceName: "PC", ClientVersion: "1.0.0", PrivateKey: privateKey, EventSequences: sequences}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(profilePath, "1.0.0")
+	if err = app.persistEventSequence("event-128", 1); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := deviceclient.LoadProfile(profilePath)
+	if err != nil || len(stored.EventSequences) != 129 || stored.EventSequences["event-000"] != 10 {
+		t.Fatalf("watermarks after event 129: count=%d oldest=%d err=%v", len(stored.EventSequences), stored.EventSequences["event-000"], err)
+	}
+	if err = app.persistEventSequence("event-000", 9); err == nil || !strings.Contains(err.Error(), "älterer signierter Eventstand") {
+		t.Fatalf("rollback after event 129 was not rejected: %v", err)
 	}
 }
 

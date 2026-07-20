@@ -101,14 +101,15 @@ function renderConnection() {
   const updateRequired = Boolean(state.connection?.updateRequired);
 	const updateAvailable = Boolean(state.connection?.updateAvailable);
   const usable = connected && Boolean(state.connection?.serverReachable) && !updateRequired;
+  const eventBlocked = usable && ["security_error", "error"].includes(state.connection?.eventReadiness?.state);
   $("connect-button").textContent = updateRequired ? "Update erforderlich" : usable ? "Verbunden" : connected ? "Status prüfen" : "PC verbinden";
   $("connect-button").classList.toggle("button-ghost", connected);
   $("connect-button").classList.toggle("button-primary", !connected);
   $("sidebar-dot").classList.toggle("online", usable);
-  $("sidebar-status").textContent = updateRequired ? "Update erforderlich" : usable ? "Sicher verbunden" : connected ? "Status ungeprüft" : "Nicht verbunden";
+  $("sidebar-status").textContent = updateRequired ? "Update erforderlich" : eventBlocked ? "Verbunden · Event gesperrt" : usable ? "Sicher verbunden" : connected ? "Status ungeprüft" : "Nicht verbunden";
   $("sidebar-device").textContent = connected ? state.connection.deviceName : "Managementserver";
   $("hero-pill").classList.toggle("online", usable);
-  $("hero-pill").lastChild.textContent = updateRequired ? " Update erforderlich" : usable ? " Sicher verbunden" : connected ? " Status ungeprüft" : " Nicht verbunden";
+  $("hero-pill").lastChild.textContent = updateRequired ? " Update erforderlich" : eventBlocked ? " Verbunden · Event gesperrt" : usable ? " Sicher verbunden" : connected ? " Status ungeprüft" : " Nicht verbunden";
   $("hero-title").textContent = updateRequired ? "LANReady muss aktualisiert werden." : connected ? `${state.connection.deviceName} ist verbunden.` : "Mach deinen PC bereit für die nächste LAN.";
   $("hero-text").textContent = updateRequired ? "Der Server hat ein signiertes Pflichtupdate gemeldet. Spiele- und Synchronisationsfunktionen bleiben bis zur sicheren Aktualisierung gesperrt." : usable ? "Suche jetzt installierte Spiele. Vor jeder Übertragung siehst du die vollständige Auswahl und meldest dich persönlich an." : connected ? "Prüfe die Verbindung zum Managementserver erneut, bevor du fortfährst." : "Verbinde LANReady mit dem Managementserver. Danach findest du installierte Spiele und entscheidest selbst, was synchronisiert wird.";
   $("hero-action").textContent = updateRequired ? "Update-Status öffnen" : usable ? "Meine Spiele öffnen" : connected ? "Status erneut prüfen" : "PC verbinden";
@@ -127,6 +128,55 @@ function renderConnection() {
   $("install-update").classList.toggle("hidden", !updateAvailable);
   $("install-update").textContent = updateRequired ? "Pflichtupdate installieren" : "Signiertes Update installieren";
   $("update-copy").textContent = updateAvailable ? "LANReady lädt ausschließlich das signierte Stable-Release, setzt den Download fort, prüft Ed25519, Sequenz, Version, Größe, SHA-256 und Windows-Authenticode und stellt bei fehlendem Gesundheitscheck automatisch die vorige Version wieder her." : "LANReady hat kein neueres signiertes Stable-Release gefunden. Die letzte funktionierende Version wird bei einem fehlgeschlagenen Neustart automatisch wiederhergestellt.";
+  renderEventReadiness();
+}
+
+function renderEventReadiness() {
+  const model = window.LANReadyReadiness.viewModel(state.connection?.eventReadiness);
+  const panel = $("event-readiness-panel");
+  panel.className = `panel event-readiness-panel tone-${model.tone}`;
+  $("event-readiness-title").textContent = model.eventTitle;
+  $("event-readiness-badge").textContent = model.label;
+  $("event-readiness-message").textContent = model.message;
+  $("ready-number").textContent = model.ringText;
+  $("ready-label").textContent = model.label;
+  const ring = document.querySelector(".readiness-ring");
+  const degrees = model.percentage === null ? 0 : model.percentage * 3.6;
+  const color = model.tone === "ok" ? "var(--cyan)" : model.tone === "warn" ? "var(--amber)" : model.tone === "danger" ? "var(--danger)" : "#697792";
+  ring.style.background = `conic-gradient(${color} ${degrees}deg, rgba(255,255,255,.1) ${degrees}deg)`;
+  ring.setAttribute("aria-label", model.percentage === null ? model.label : `${model.label}: ${model.percentage} Prozent`);
+
+  const rows = [];
+  model.launchers.forEach((launcher) => rows.push(readinessComponent(
+    "Launcher", launcherName(launcher.launcher === "ea-app" ? "ea_app" : launcher.launcher === "ubisoft-connect" ? "ubisoft_connect" : launcher.launcher),
+    `Soll ${launcher.requiredVersion} · ${launcher.statusLabel}`, launcher.required, launcher.status
+  )));
+  model.games.forEach((game) => {
+    const detected = game.detectedVersion ? `Lokal ${game.detectedVersion}` : "Keine lokale Version";
+    rows.push(readinessComponent("Spiel", game.name || game.gameId, `Soll ${game.requiredVersion} · ${detected} · ${game.statusLabel}`, game.required, game.status));
+  });
+  const components = $("event-readiness-components");
+  components.replaceChildren(...rows);
+  components.classList.toggle("hidden", rows.length === 0);
+}
+
+function readinessComponent(kind, name, details, required, status) {
+  const row = document.createElement("div");
+  row.className = "event-component";
+  const icon = document.createElement("span");
+  icon.className = "event-component-icon";
+  icon.textContent = kind === "Spiel" ? "◈" : "◇";
+  const copy = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = name;
+  const meta = document.createElement("small");
+  meta.textContent = `${kind} · ${required ? "erforderlich" : "optional"} · ${details}`;
+  copy.append(title, meta);
+  const badge = document.createElement("span");
+  badge.className = `component-state state-${status}`;
+  badge.textContent = window.LANReadyReadiness.componentBadge(status, required);
+  row.append(icon, copy, badge);
+  return row;
 }
 
 function primaryAction() {

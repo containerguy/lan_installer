@@ -286,10 +286,11 @@ Auf Windows erzeugt `keygen` für den Private Key eine geschützte, nicht geerbt
 1. Portable ZIP entpacken und `LANReady.exe` starten oder das per-user Setup ausführen.
 2. Als Admin unter `/admin/clients` einen zehn Minuten gültigen Enrollment-Code erzeugen.
 3. Im Client **PC verbinden** wählen und den einmaligen Code eingeben.
-4. **Spiele suchen** wählen. LANReady zeigt Launcher, externe ID, Version und Installationspfad aller Funde.
-5. Die gewünschten Einträge auswählen, **Auswahl synchronisieren** wählen, die Browser-Anmeldung bestätigen und die angezeigten Übertragungsdaten ein letztes Mal freigeben.
+4. Nach erfolgreichem Statusabruf zeigt die Startseite das aktive signierte Event, erforderliche Launcher und Spiele sowie den lokal ermittelten Bereitschaftsgrad. Fehlende, abweichende oder nicht sicher bestimmbare Versionen bleiben ausdrücklich als Aktion beziehungsweise Warnung sichtbar.
+5. **Spiele suchen** wählen. LANReady zeigt Launcher, externe ID, Version und Installationspfad aller Funde.
+6. Die gewünschten Einträge auswählen, **Auswahl synchronisieren** wählen, die Browser-Anmeldung bestätigen und die angezeigten Übertragungsdaten ein letztes Mal freigeben.
 
-Das gesamte Geräteprofil einschließlich Serverorigin und Ed25519-Geräteschlüssel wird unter `%AppData%\LANReady\device.json` gespeichert und mit Windows DPAPI integritätsgeschützt an den aktuellen Benutzer gebunden. Persönliche Zugriffstokens existieren nur im Arbeitsspeicher und werden vor dem einmaligen Upload verworfen. Launcher-Passwörter werden weder gelesen noch gespeichert.
+Das gesamte Geräteprofil einschließlich Serverorigin, Ed25519-Geräteschlüssel sowie niemals sinkender Event- und Update-Sequenzstände wird unter `%AppData%\LANReady\device.json` gespeichert und mit Windows DPAPI integritätsgeschützt an den aktuellen Benutzer gebunden. Profiländerungen werden vor dem atomaren Austausch dauerhaft geflusht; übergroße Watermark-Sätze ersetzen den lesbaren Altstand nicht. Registry-/Dateisystemerkennung hat ein festes Zeitlimit und blockiert weder Status-UI noch andere Clientaktionen dauerhaft. Persönliche Zugriffstokens existieren nur im Arbeitsspeicher und werden vor dem einmaligen Upload verworfen. Launcher-Passwörter werden weder gelesen noch gespeichert.
 
 ### Vorübergehenden CLI-Downloadablauf bauen
 
