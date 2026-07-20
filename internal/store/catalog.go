@@ -28,6 +28,13 @@ type Game struct {
 	Slug, Name, LauncherName, ExternalGameID string
 	Enabled                                  bool
 }
+type StandaloneGame struct {
+	ID             int64    `json:"id"`
+	Slug           string   `json:"slug"`
+	Name           string   `json:"name"`
+	ExternalGameID string   `json:"externalGameId"`
+	Versions       []string `json:"versions"`
+}
 type LauncherVersion struct {
 	ID, Revision, LauncherID       int64
 	LauncherName, Version          string
@@ -100,6 +107,35 @@ func (s *Store) Games(ctx context.Context) ([]Game, error) {
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) StandaloneGames(ctx context.Context) ([]StandaloneGame, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.slug,g.name,g.external_game_id,COALESCE(v.version,'') FROM games g JOIN launchers l ON l.id=g.launcher_id LEFT JOIN game_versions v ON v.game_id=g.id AND v.enabled=1 WHERE l.adapter='standalone' AND l.enabled=1 AND g.enabled=1 ORDER BY g.name,v.version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]StandaloneGame, 0)
+	byID := make(map[int64]int)
+	for rows.Next() {
+		var gameID int64
+		var game StandaloneGame
+		var version string
+		if err = rows.Scan(&gameID, &game.Slug, &game.Name, &game.ExternalGameID, &version); err != nil {
+			return nil, err
+		}
+		game.ID = gameID
+		index, exists := byID[game.ID]
+		if !exists {
+			index = len(out)
+			byID[game.ID] = index
+			out = append(out, game)
+		}
+		if version != "" {
+			out[index].Versions = append(out[index].Versions, version)
+		}
 	}
 	return out, rows.Err()
 }

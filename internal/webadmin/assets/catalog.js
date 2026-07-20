@@ -17,8 +17,8 @@
       empty: "Lege das erste Spiel an.", columns: ["Name", "Launcher", "Externe ID", "Status", ""],
     },
     launchers: {
-      kind: "launcher", singular: "Launcher", title: "Launcher", subtitle: "Steam, EA App und Ubisoft Connect samt Adapter verwalten.",
-      empty: "Die drei initialen Launcher werden normalerweise automatisch angelegt.", columns: ["Name", "Adapter", "Slug", "Status", ""],
+      kind: "launcher", singular: "Launcher", title: "Launcher", subtitle: "Steam, EA App, Ubisoft Connect und den festen Typ „Ohne Launcher“ verwalten.",
+      empty: "Die vier initialen Typen werden normalerweise automatisch angelegt.", columns: ["Name", "Adapter", "Slug", "Status", ""],
     },
     "launcher-versions": {
       kind: "launcher-version", singular: "Launcher-Version", title: "Launcher-Versionen", subtitle: "Installer, Quelle und verifizierte Installationsparameter zuordnen.",
@@ -491,7 +491,8 @@
     if (!state.data) return;
     const enabled = (entry) => Boolean(entry.Enabled);
     populateSelect(byId("entity-launcher"), selectableParents(state.data.launchers, item.LauncherID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.LauncherID);
-    populateSelect(byId("version-launcher"), selectableParents(state.data.launchers, item.LauncherID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.LauncherID);
+    const versionLaunchers = state.data.launchers.filter((entry) => entry.Adapter !== "standalone");
+    populateSelect(byId("version-launcher"), selectableParents(versionLaunchers, item.LauncherID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.LauncherID);
     populateSelect(byId("version-game"), selectableParents(state.data.games, item.GameID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.GameID);
     populateSelect(byId("entity-source"), selectableParents(state.data.sources, item.SourceID, enabled), (entry) => parentLabel(entry, entry.Name + " · " + entry.Kind, enabled), item.SourceID);
     populateSelect(byId("assignment-event"), state.data.events.filter((entry) => entry.Status === "draft"), (entry) => entry.Name, 0);
@@ -581,16 +582,25 @@
       if (item.Status) byId("event-status").value = item.Status;
     }
 
-    const immutable = state.tab === "events" && item?.Status === "published";
+    const systemLauncher = state.tab === "launchers" && item?.Adapter === "standalone";
+    const standaloneGame = state.tab === "games" && item && state.data.launchers.some((launcher) => Number(launcher.ID) === Number(item.LauncherID) && launcher.Adapter === "standalone");
+    const immutable = (state.tab === "events" && item?.Status === "published") || systemLauncher;
     if (immutable) {
-      byId("editor-message").textContent = "Dieses Event ist veröffentlicht und deshalb unveränderlich.";
+      byId("editor-message").textContent = systemLauncher ? "„Ohne Launcher“ ist ein fester LANReady-Systemtyp. Verwalte darunter die einzelnen Spiele." : "Dieses Event ist veröffentlicht und deshalb unveränderlich.";
       byId("editor-message").className = "notice error";
     }
     byId("catalog-form").querySelectorAll("input,select").forEach((control) => {
       if (!control.closest("[hidden]")) control.disabled = immutable || !canEdit;
     });
+    if (standaloneGame) {
+      byId("entity-slug").disabled = true;
+      byId("entity-launcher").disabled = true;
+      byId("entity-external-id").disabled = true;
+      byId("editor-message").textContent = "Die Identität dieses Spiels ohne Launcher ist dauerhaft. Name und Status bleiben bearbeitbar.";
+      byId("editor-message").className = "notice";
+    }
     if (byId("save-entity")) byId("save-entity").hidden = immutable;
-    if (byId("delete-entity")) byId("delete-entity").hidden = !item || immutable;
+    if (byId("delete-entity")) byId("delete-entity").hidden = !item || immutable || standaloneGame;
     if (byId("deactivate-entity")) {
       byId("deactivate-entity").hidden = !item || immutable || (state.tab !== "events" && item.Enabled === false) || (state.tab === "events" && item.Status === "archived");
       byId("deactivate-entity").textContent = state.tab === "events" ? "Archivieren" : "Deaktivieren";

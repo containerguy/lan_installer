@@ -25,6 +25,7 @@ var (
 	ErrAuthorizationPending  = errors.New("authorization pending")
 	ErrAuthorizationSlowDown = errors.New("authorization polling too fast")
 	eventIDPattern           = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	standaloneSlugPattern    = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 )
 
 type Client struct {
@@ -44,6 +45,14 @@ type Authorization struct {
 type ActiveEvent struct {
 	EventID    string `json:"eventId"`
 	ReleaseURL string `json:"releaseUrl"`
+}
+
+type StandaloneGame struct {
+	ID             int64    `json:"id"`
+	Slug           string   `json:"slug"`
+	Name           string   `json:"name"`
+	ExternalGameID string   `json:"externalGameId"`
+	Versions       []string `json:"versions"`
 }
 
 type Bootstrap struct {
@@ -194,6 +203,73 @@ func (c *Client) EventRelease(ctx context.Context, eventID, releaseURL string) (
 		return nil, errors.New("event release size is invalid")
 	}
 	return content, nil
+}
+
+func (c *Client) StandaloneGames(ctx context.Context) ([]StandaloneGame, error) {
+	request, err := c.signedRequest(ctx, http.MethodGet, "/v2/device/standalone-games", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := httpClient(c.HTTP).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, responseError(response)
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return nil, errors.New("standalone catalog content type is invalid")
+	}
+	var decoded struct {
+		Games []StandaloneGame `json:"games"`
+	}
+	const maximum = 1 << 20
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil || len(content) == 0 || len(content) > maximum {
+		return nil, errors.New("standalone catalog response size is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&decoded); err != nil {
+		return nil, errors.New("standalone catalog response is invalid")
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("standalone catalog response has trailing data")
+	}
+	if len(decoded.Games) > 10000 {
+		return nil, errors.New("standalone catalog has too many entries")
+	}
+	seenIDs := make(map[int64]struct{}, len(decoded.Games))
+	seenSlugs := make(map[string]struct{}, len(decoded.Games))
+	for _, game := range decoded.Games {
+		if game.ID < 1 || len(game.Slug) > 64 || !standaloneSlugPattern.MatchString(game.Slug) || game.ExternalGameID != game.Slug || strings.TrimSpace(game.Name) == "" || len(game.Name) > 200 {
+			return nil, errors.New("standalone catalog entry is invalid")
+		}
+		if _, duplicate := seenIDs[game.ID]; duplicate {
+			return nil, errors.New("standalone catalog id is duplicated")
+		}
+		if _, duplicate := seenSlugs[game.Slug]; duplicate {
+			return nil, errors.New("standalone catalog slug is duplicated")
+		}
+		seenIDs[game.ID] = struct{}{}
+		seenSlugs[game.Slug] = struct{}{}
+		if len(game.Versions) > 10000 {
+			return nil, errors.New("standalone catalog has too many versions")
+		}
+		seenVersions := make(map[string]struct{}, len(game.Versions))
+		for _, version := range game.Versions {
+			if strings.TrimSpace(version) != version || version == "" || len(version) > 256 {
+				return nil, errors.New("standalone catalog version is invalid")
+			}
+			if _, duplicate := seenVersions[version]; duplicate {
+				return nil, errors.New("standalone catalog version is duplicated")
+			}
+			seenVersions[version] = struct{}{}
+		}
+	}
+	return decoded.Games, nil
 }
 
 func (c *Client) StartAuthorization(ctx context.Context) (Authorization, error) {

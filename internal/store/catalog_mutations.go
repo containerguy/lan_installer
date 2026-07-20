@@ -174,7 +174,7 @@ func (s *Store) SaveLauncherAtomic(ctx context.Context, value Launcher, audit *A
 	}
 	value.Adapter = strings.ToLower(strings.TrimSpace(value.Adapter))
 	switch value.Adapter {
-	case "steam", "ea_app", "ubisoft_connect":
+	case "steam", "ea_app", "ubisoft_connect", "standalone":
 	default:
 		return 0, errors.New("unsupported launcher adapter")
 	}
@@ -183,7 +183,20 @@ func (s *Store) SaveLauncherAtomic(ctx context.Context, value Launcher, audit *A
 		return 0, err
 	}
 	defer tx.Rollback()
+	if value.ID == 0 && value.Adapter == "standalone" {
+		return 0, errors.New("the standalone launcher is managed by LANReady")
+	}
 	if value.ID > 0 {
+		var existingAdapter string
+		if err = tx.QueryRowContext(ctx, `SELECT adapter FROM launchers WHERE id=?`, value.ID).Scan(&existingAdapter); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, ErrCatalogNotFound
+			}
+			return 0, err
+		}
+		if existingAdapter == "standalone" || value.Adapter == "standalone" {
+			return 0, errors.New("the standalone launcher is managed by LANReady")
+		}
 		locked, graphErr := catalogPublishedReference(ctx, tx, "launcher", value.ID)
 		if graphErr != nil {
 			return 0, graphErr
@@ -228,17 +241,30 @@ func (s *Store) SaveGameAtomic(ctx context.Context, value Game, audit *AuditEntr
 		return 0, err
 	}
 	defer tx.Rollback()
+	var targetAdapter string
+	if err = tx.QueryRowContext(ctx, `SELECT adapter FROM launchers WHERE id=?`, value.LauncherID).Scan(&targetAdapter); err != nil {
+		return 0, err
+	}
+	if targetAdapter == "standalone" {
+		if len(value.Slug) > 64 {
+			return 0, errors.New("standalone game slug is too long for event identity")
+		}
+		value.ExternalGameID = value.Slug
+	}
 	launcherChanged := value.ID == 0
 	externalIDChanged := value.ID == 0
 	if value.ID > 0 {
 		var existingLauncherID int64
-		var existingExternalID string
-		err = tx.QueryRowContext(ctx, `SELECT launcher_id,COALESCE(external_game_id,'') FROM games WHERE id=?`, value.ID).Scan(&existingLauncherID, &existingExternalID)
+		var existingExternalID, existingSlug, existingAdapter string
+		err = tx.QueryRowContext(ctx, `SELECT g.launcher_id,COALESCE(g.external_game_id,''),g.slug,l.adapter FROM games g JOIN launchers l ON l.id=g.launcher_id WHERE g.id=?`, value.ID).Scan(&existingLauncherID, &existingExternalID, &existingSlug, &existingAdapter)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrCatalogNotFound
 		}
 		if err != nil {
 			return 0, err
+		}
+		if existingAdapter == "standalone" && (existingSlug != value.Slug || existingLauncherID != value.LauncherID) {
+			return 0, errors.New("standalone game identity is immutable; deactivate the game instead")
 		}
 		launcherChanged = existingLauncherID != value.LauncherID
 		externalIDChanged = existingExternalID != value.ExternalGameID
@@ -496,6 +522,18 @@ func (s *Store) SetCatalogEnabledAtomic(ctx context.Context, kind string, id, ex
 		return err
 	}
 	defer tx.Rollback()
+	if kind == "launcher" {
+		var adapter string
+		if err = tx.QueryRowContext(ctx, `SELECT adapter FROM launchers WHERE id=?`, id).Scan(&adapter); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrCatalogNotFound
+			}
+			return err
+		}
+		if adapter == "standalone" {
+			return errors.New("the standalone launcher is managed by LANReady")
+		}
+	}
 	if !enabled {
 		locked, graphErr := catalogPublishedReference(ctx, tx, kind, id)
 		if graphErr != nil {
@@ -527,6 +565,30 @@ func (s *Store) DeleteCatalogAtomic(ctx context.Context, kind string, id, expect
 		return err
 	}
 	defer tx.Rollback()
+	if kind == "launcher" {
+		var adapter string
+		if err = tx.QueryRowContext(ctx, `SELECT adapter FROM launchers WHERE id=?`, id).Scan(&adapter); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrCatalogNotFound
+			}
+			return err
+		}
+		if adapter == "standalone" {
+			return errors.New("the standalone launcher is managed by LANReady")
+		}
+	}
+	if kind == "game" {
+		var adapter string
+		if err = tx.QueryRowContext(ctx, `SELECT l.adapter FROM games g JOIN launchers l ON l.id=g.launcher_id WHERE g.id=?`, id).Scan(&adapter); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrCatalogNotFound
+			}
+			return err
+		}
+		if adapter == "standalone" {
+			return errors.New("standalone games cannot be deleted; deactivate the game instead")
+		}
+	}
 	var table string
 	var refs int64
 	switch kind {

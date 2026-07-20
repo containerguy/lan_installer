@@ -73,6 +73,7 @@ func newAPI(st *store.Store, publicURL string, artifacts *artifact.Store, truste
 	a.mux.HandleFunc("POST /v2/user-device-authorizations", a.createAuthorization)
 	a.mux.HandleFunc("GET /v2/user-device-authorizations/{id}", a.pollAuthorization)
 	a.mux.HandleFunc("POST /v2/device/inventory-scans", a.saveInventory)
+	a.mux.HandleFunc("GET /v2/device/standalone-games", a.standaloneGames)
 	a.mux.HandleFunc("GET /v2/events/{eventId}/release", a.eventRelease)
 	a.mux.HandleFunc("GET /v2/client/releases/latest", a.clientUpdateRelease)
 	if a.artifacts != nil {
@@ -82,6 +83,25 @@ func newAPI(st *store.Store, publicURL string, artifacts *artifact.Store, truste
 		a.mux.HandleFunc("GET /v2/client/artifacts/sha256/{digest}", a.downloadArtifact)
 	}
 	return a, nil
+}
+
+func (a *API) standaloneGames(w http.ResponseWriter, r *http.Request) {
+	deviceID, _, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireCompatibleClient(w, r, deviceID) {
+		return
+	}
+	games, err := a.store.StandaloneGames(r.Context())
+	if err != nil {
+		a.error(w, http.StatusInternalServerError, "standalone_catalog_failed", "Spiele ohne Launcher konnten nicht geladen werden.")
+		return
+	}
+	if games == nil {
+		games = []store.StandaloneGame{}
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"games": games})
 }
 
 type enrollRequest struct {
@@ -133,7 +153,7 @@ func (a *API) enrollDevice(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusUnprocessableEntity, "enrollment_invalid", "Gerät konnte nicht registriert werden.")
 		return
 	}
-	a.writeJSON(w, http.StatusCreated, map[string]any{"deviceId": device.ID, "serverTime": a.now().Format(time.RFC3339), "apiVersion": 2, "capabilities": []string{"range-download", "status-v1", "client-update-v1", "inventory-v1"}, "bootstrapUrl": "/v2/device/bootstrap"})
+	a.writeJSON(w, http.StatusCreated, map[string]any{"deviceId": device.ID, "serverTime": a.now().Format(time.RFC3339), "apiVersion": 2, "capabilities": []string{"range-download", "status-v1", "client-update-v1", "inventory-v1", "standalone-catalog-v1"}, "bootstrapUrl": "/v2/device/bootstrap"})
 }
 
 func (a *API) clientIP(r *http.Request) string {
@@ -235,7 +255,7 @@ func (a *API) bootstrap(w http.ResponseWriter, r *http.Request) {
 		a.writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "client_update_required", "message": "Ein signiertes LANReady-Clientupdate ist erforderlich.", "requestId": w.Header().Get("X-Request-ID"), "clientUpdate": clientUpdate})
 		return
 	}
-	a.writeJSON(w, http.StatusOK, map[string]any{"serverTime": a.now().Format(time.RFC3339), "apiVersion": 2, "capabilities": []string{"range-download", "status-v1", "client-update-v1", "inventory-v1"}, "activeEvent": activeEvent, "clientUpdate": clientUpdate})
+	a.writeJSON(w, http.StatusOK, map[string]any{"serverTime": a.now().Format(time.RFC3339), "apiVersion": 2, "capabilities": []string{"range-download", "status-v1", "client-update-v1", "inventory-v1", "standalone-catalog-v1"}, "activeEvent": activeEvent, "clientUpdate": clientUpdate})
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {

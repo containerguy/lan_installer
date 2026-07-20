@@ -9,8 +9,39 @@
         "enum": [
           "range-download",
           "status-v1",
-          "client-update-v1"
+          "client-update-v1",
+          "inventory-v1",
+          "standalone-catalog-v1"
         ]
+      }
+    },
+    "standaloneGame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "slug", "name", "externalGameId", "versions"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "slug": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "externalGameId": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "versions": {
+          "type": "array",
+          "maxItems": 10000,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        }
+      }
+    },
+    "standaloneGamesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["games"],
+      "properties": {
+        "games": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {"$ref": "#/$defs/standaloneGame"}
+        }
       }
     },
     "activeEvent": {

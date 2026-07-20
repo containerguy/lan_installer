@@ -372,7 +372,7 @@ func validateInventory(scan InventoryScan) error {
 		return errors.New("inventory client version is invalid")
 	}
 	for i, item := range scan.Installations {
-		if item.Launcher != "steam" && item.Launcher != "ea_app" && item.Launcher != "ubisoft_connect" {
+		if item.Launcher != "steam" && item.Launcher != "ea_app" && item.Launcher != "ubisoft_connect" && item.Launcher != "standalone" {
 			return fmt.Errorf("installation %d has invalid launcher", i)
 		}
 		if strings.TrimSpace(item.ExternalGameID) == "" || len(item.ExternalGameID) > 256 || strings.TrimSpace(item.DisplayName) == "" || len(item.DisplayName) > 500 || strings.TrimSpace(item.VersionSource) == "" || len(item.VersionSource) > 100 || strings.TrimSpace(item.InstallPath) == "" || len(item.InstallPath) > 4096 {
@@ -433,6 +433,26 @@ func (s *Store) SaveDeviceInventory(ctx context.Context, deviceID, userToken str
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	for position, item := range scan.Installations {
+		if item.Launcher != "standalone" {
+			continue
+		}
+		if item.DetectedVersion == nil {
+			if item.VersionSource != "manual-registration-unverified" {
+				return fmt.Errorf("installation %d has invalid standalone version source", position)
+			}
+		} else if strings.TrimSpace(*item.DetectedVersion) == "" || item.VersionSource != "windows-file-version" {
+			return fmt.Errorf("installation %d has invalid standalone version evidence", position)
+		}
+		var catalogGameID int64
+		err = tx.QueryRowContext(ctx, `SELECT g.id FROM games g JOIN launchers l ON l.id=g.launcher_id WHERE l.adapter='standalone' AND l.enabled=1 AND g.enabled=1 AND g.slug=? AND g.external_game_id=?`, item.ExternalGameID, item.ExternalGameID).Scan(&catalogGameID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("installation %d is not bound to an active standalone catalog game", position)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE device_inventory_scans SET current=0 WHERE device_id=? AND current=1`, deviceID); err != nil {
 		return err

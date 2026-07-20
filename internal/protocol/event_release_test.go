@@ -149,6 +149,7 @@ func TestDeviceBootstrapAndEnrollmentSchemas(t *testing.T) {
 		{"enrollment code", "#/$defs/enrollmentCode", `{"id":"01K0ENROLLMENT00000000001","code":"K7M4P-9Q2XR-T6V8W-3Y5ZA-BCDEFG","expiresAt":"2026-07-16T08:10:00Z","maxUses":1}`},
 		{"enroll request", "#/$defs/enrollRequest", `{"code":"K7M4P-9Q2XR-T6V8W-3Y5ZA-BCDEFG","publicKey":"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg","deviceName":"GAMING-PC-01","windowsVersion":"11.0.26100","clientVersion":"0.3.0"}`},
 		{"enroll response", "#/$defs/enrollResponse", `{"deviceId":"6ba7b810-9dad-11d1-80b4-00c04fd430c8","serverTime":"2026-07-16T08:00:00Z","apiVersion":2,"capabilities":["range-download","status-v1","client-update-v1"],"bootstrapUrl":"/v2/device/bootstrap"}`},
+		{"standalone games", "#/$defs/standaloneGamesResponse", `{"games":[{"id":4,"slug":"open-ra","name":"OpenRA","externalGameId":"open-ra","versions":["2026.1"]}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -91,11 +91,17 @@ func ValidateEventReleaseSemantics(payload []byte) error {
 			return fmt.Errorf("duplicate game %s", game.GameID)
 		}
 		games[game.GameID] = struct{}{}
-		if _, exists := launchers[game.LauncherID]; !exists {
+		if game.LauncherID != "standalone" {
+			if _, exists := launchers[game.LauncherID]; !exists {
+				return fmt.Errorf("game %s references missing launcher %s", game.GameID, game.LauncherID)
+			}
+		}
+		expectedAdapter, expectedTarget := launcherAdapters[game.LauncherID], launcherTargets[game.LauncherID]
+		if game.LauncherID == "standalone" {
+			expectedTarget = "user_games"
+		} else if expectedAdapter == "" {
 			return fmt.Errorf("game %s references missing launcher %s", game.GameID, game.LauncherID)
 		}
-		expectedAdapter := launcherAdapters[game.LauncherID]
-		expectedTarget := launcherTargets[game.LauncherID]
 		for _, payload := range game.Payloads {
 			allowed, known := allowedOperations[payload.Type]
 			if !known {

@@ -1,6 +1,6 @@
 # LANReady – Übergabe
 
-Stand: 19.07.2026
+Stand: 20.07.2026
 
 ## Aktuelles Ziel
 
@@ -18,6 +18,7 @@ LANReady wird als selbst gehostete Plattform für LAN-Partys aufgebaut: Manageme
 - Rollenmodell: admin, operator, viewer; spätere Entra-ID-Anbindung über externe Identitäten.
 - Signaturschlüssel später in separater, maximal gehärteter Signer-Grenze; aktuell offline.
 - Der Windows-Client erkennt nach persönlicher Browser-Anmeldung lokal installierte Spiele von Steam, EA App und Ubisoft Connect und synchronisiert Launcher, externe Spiel-ID, erkannte Version und Installationspfad in das Inventar des enrollten Geräts. Der zentrale Katalog wird nie automatisch verändert; eine Übernahme erfolgt ausdrücklich durch einen Admin.
+- Kopierte beziehungsweise manuell installierte Spiele werden nicht frei vom Client erfunden: Ein Admin legt sie zuerst als Spiel des festen Systemtyps **Ohne Launcher** an. Der Benutzer bindet anschließend lokal eine `.exe`; diese Registrierung liegt DPAPI-CurrentUser-geschützt im Geräteprofil und kann nach persönlicher Browserfreigabe wie ein Launcherfund synchronisiert werden.
 
 ## MVP-Einordnung
 
@@ -159,3 +160,12 @@ SSO, SMB/NFS als direkte Inhaltsquellen, P2P und differenzielles Chunking bleibe
 - Event-Watermarks werden vollständig im DPAPI-CurrentUser-Profil behalten, vor einem atomaren dauerhaften Dateiaustausch geflusht und durch normale Clientlogik niemals eviziert. Absichtliches Löschen oder Zurückspielen des gesamten Benutzerprofils bleibt als lokale Anti-Rollback-Grenze dokumentiert und benötigt für weitergehenden Schutz einen späteren serverseitigen gerätebezogenen Höchststand. Eine gemeinsame 2-MiB-Grenze wird bereits vor dem Replace geprüft, sodass ein übergroßer Stand das lesbare Profil nicht beschädigt.
 - Spieleerkennung läuft nicht mehr unter dem globalen App-Mutex. Status- und manuelle Erkennung besitzen feste Zeitlimits; ein festhängender Registry-/UNC-Lauf wird als einzelner Hintergrundlauf dedupliziert und blockiert weder UI noch Folgeaktionen unbegrenzt. Regressionstests decken Timeout/Mutex-Freigabe, Event 128→129 ohne Watermark-Verlust, Rollbackablehnung und Profilgrößenfehler ab.
 - Das unabhängige Event-Readiness-Review endete nach P1-/P2-Nacharbeit mit PASS und null offenen P0/P1/P2. Vollständige Go- und Node-Tests, Go Vet sowie Windows-x64-Cross-Build für CLI und Wails-GUI sind grün. Der Race-Detector war nach dem Discovery-Refactor grün; der letzte reine Profilgrößen-Test änderte keine Parallelitätslogik. Auf der Docker-VM wurde wegen 99 Prozent Root-Belegung ausschließlich ungenutzter Build-Cache und dangling Images bereinigt; Produktionscontainer, Volumes und benannte Images blieben unangetastet.
+
+## Lokal fertig, noch nicht produktiv ausgerollt – Spiele ohne Launcher (20.07.2026)
+
+- SQLite v18 ergänzt `standalone` in Inventar- und Zuordnungstabellen, migriert vorhandene Items/Katalog-/Versionszuordnungen verlustfrei und legt den unveränderlichen Systemtyp **Ohne Launcher** an. Ein Konflikt mit einem bereits benutzten Slug/Adapter bricht die Migration ab, statt fremde Katalogdaten zu überschreiben.
+- Die Management-UI kann Spiele diesem Typ zuordnen; der Server erzwingt deren Slug als stabile externe Spiel-ID. Der Systemtyp kann nicht dupliziert, umbenannt, deaktiviert oder gelöscht werden und erscheint nicht als Ziel für Launcher-Versionen.
+- Die signierte Geräte-API `GET /v2/device/standalone-games` liefert nur aktive kataloggebundene Einträge. Der Windows-Client wählt das Spiel aus dieser Liste und die Haupt-EXE über den nativen Windows-Dateidialog. UNC-Pfade, gemappte Netzlaufwerke, Windows-Gerätenamen, Alternate Data Streams und freie unbekannte Einträge werden vor Datei-I/O abgewiesen.
+- Katalog-ID, externe ID, Anzeigename und EXE-Pfad liegen im bereits DPAPI-CurrentUser-geschützten Profil. Die Discovery mischt erreichbare Registrierungen mit Steam/EA/Ubisoft-Funden; fehlende Dateien erzeugen eine Warnung. Nur vorhandene Windows-VERSIONINFO-Daten gelten als erkannte Version, sonst bleibt der Fund ausdrücklich unverifiziert.
+- Persönlich bestätigte Inventarsynchronisation und signierte Event-Bereitschaft akzeptieren `standalone`. Ein Standalone-Spiel benötigt keinen Launcher-Release; exakte Versionsbereitschaft bleibt erforderlich und der Event-Target-Root ist auf `user_games` begrenzt.
+- Lokale Gates: vollständige Go- und Node-Tests, Go Vet, Race Detector für Store/Device-API/Deviceclient/Protocol/Windowsapp, Windows-amd64-GUI-Cross-Build und Chrome-Layoutprüfung bei 1440×900 sind grün. Zwei zuvor fest bis 20.07.2026 gültige Release-Testfixtures wurden zeitstabil gemacht. Das unabhängige P1-Re-Review endete nach Pfad-/Identitäts-/Protokollhärtung mit PASS und null offenen P0/P1/P2.

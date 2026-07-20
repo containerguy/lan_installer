@@ -20,6 +20,7 @@ import (
 	contractschemas "github.com/containerguy/lan_installer/docs/contracts/schemas"
 	"github.com/containerguy/lan_installer/internal/deviceclient"
 	"github.com/containerguy/lan_installer/internal/discovery"
+	"github.com/containerguy/lan_installer/internal/fileversion"
 	"github.com/containerguy/lan_installer/internal/protocol"
 	"github.com/containerguy/lan_installer/internal/selfupdate"
 	"github.com/containerguy/lan_installer/internal/windowsupdate"
@@ -29,10 +30,13 @@ import (
 const DefaultServerURL = "https://game-manager.familie-keller.info"
 
 type App struct {
-	profilePath string
-	version     string
-	httpClient  *http.Client
-	discover    func() (discovery.Result, error)
+	profilePath              string
+	version                  string
+	httpClient               *http.Client
+	discover                 func() (discovery.Result, error)
+	stat                     func(string) (os.FileInfo, error)
+	fileVersion              func(string) (string, error)
+	validateManualExecutable func(string) error
 
 	opMu                    sync.Mutex
 	discoveryGeneration     uint64
@@ -143,6 +147,11 @@ type SyncResult struct {
 	Uploaded int `json:"uploaded"`
 }
 
+type ManualGameInput struct {
+	CatalogGameID  int64  `json:"catalogGameId"`
+	ExecutablePath string `json:"executablePath"`
+}
+
 type UpdateProgress struct {
 	Running    bool   `json:"running"`
 	Stage      string `json:"stage"`
@@ -165,7 +174,7 @@ func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
 		}
 	}
 	validator, validatorErr := protocol.NewReleaseValidatorFromJSON(contractschemas.EventReleaseEnvelope, contractschemas.ClientUpdateEnvelope)
-	return &App{profilePath: profilePath, version: version, discover: discovery.Discover, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
+	return &App{profilePath: profilePath, version: version, discover: discovery.Discover, stat: os.Stat, fileVersion: fileversion.Read, validateManualExecutable: deviceclient.ValidateManualExecutableLocation, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
 }
 
 func (a *App) SetHealthRequest(request selfupdate.HealthRequest) { a.healthRequest = &request }
@@ -508,6 +517,123 @@ func (a *App) Discover() (discovery.Result, error) {
 	return result, nil
 }
 
+func (a *App) StandaloneCatalog() ([]deviceclient.StandaloneGame, error) {
+	a.opMu.Lock()
+	profile, err := a.connectedProfile()
+	if err == nil {
+		err = a.requireReadyLocked()
+	}
+	a.opMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	games, err := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).StandaloneGames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Katalog für Spiele ohne Launcher laden: %w", err)
+	}
+	return games, nil
+}
+
+func (a *App) ChooseManualExecutable() (string, error) {
+	a.opMu.Lock()
+	ctx := a.runtimeContext
+	a.opMu.Unlock()
+	if ctx == nil {
+		return "", errors.New("die Dateiauswahl ist erst nach dem Start der Windows-Oberfläche verfügbar")
+	}
+	return wailsruntime.OpenFileDialog(ctx, wailsruntime.OpenDialogOptions{
+		Title:   "Hauptprogramm des Spiels auswählen",
+		Filters: []wailsruntime.FileFilter{{DisplayName: "Windows-Programme (*.exe)", Pattern: "*.exe"}},
+	})
+}
+
+func (a *App) SaveManualGame(input ManualGameInput) error {
+	input.ExecutablePath = strings.TrimSpace(input.ExecutablePath)
+	if input.CatalogGameID < 1 || input.ExecutablePath == "" {
+		return errors.New("Katalogspiel und Hauptprogramm sind erforderlich")
+	}
+	if err := a.validateManualExecutable(input.ExecutablePath); err != nil {
+		return errors.New("das Hauptprogramm muss eine lokale, absolute Windows-EXE ohne Netzwerk-, Geräte- oder Alternativdatenstrom-Pfad sein")
+	}
+	info, err := a.stat(input.ExecutablePath)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("das ausgewählte Hauptprogramm ist nicht als reguläre Datei erreichbar")
+	}
+	catalog, err := a.StandaloneCatalog()
+	if err != nil {
+		return err
+	}
+	var selected *deviceclient.StandaloneGame
+	for index := range catalog {
+		if catalog[index].ID == input.CatalogGameID {
+			selected = &catalog[index]
+			break
+		}
+	}
+	if selected == nil {
+		return errors.New("das ausgewählte Spiel ist im aktuellen Standalone-Katalog nicht mehr verfügbar")
+	}
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	profile, err := a.connectedProfile()
+	if err != nil {
+		return err
+	}
+	games := append([]deviceclient.ManualGame(nil), profile.ManualGames...)
+	registration := deviceclient.ManualGame{CatalogGameID: selected.ID, ExternalGameID: selected.ExternalGameID, DisplayName: selected.Name, ExecutablePath: input.ExecutablePath}
+	replaced := false
+	for index := range games {
+		if games[index].CatalogGameID == selected.ID {
+			games[index] = registration
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		games = append(games, registration)
+	}
+	sort.Slice(games, func(i, j int) bool { return games[i].CatalogGameID < games[j].CatalogGameID })
+	profile.ManualGames = games
+	if err = deviceclient.SaveProfile(a.profilePath, profile); err != nil {
+		return fmt.Errorf("manuell hinzugefügtes Spiel geschützt speichern: %w", err)
+	}
+	a.clearSessionLocked()
+	return nil
+}
+
+func (a *App) RemoveManualGame(externalGameID string) error {
+	externalGameID = strings.TrimSpace(externalGameID)
+	if externalGameID == "" {
+		return errors.New("ungültiges Katalogspiel")
+	}
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	profile, err := a.connectedProfile()
+	if err != nil {
+		return err
+	}
+	games := make([]deviceclient.ManualGame, 0, len(profile.ManualGames))
+	removed := false
+	for _, game := range profile.ManualGames {
+		if game.ExternalGameID == externalGameID {
+			removed = true
+			continue
+		}
+		games = append(games, game)
+	}
+	if !removed {
+		return errors.New("die manuelle Spielregistrierung wurde nicht gefunden")
+	}
+	profile.ManualGames = games
+	if err = deviceclient.SaveProfile(a.profilePath, profile); err != nil {
+		return fmt.Errorf("manuelle Spielregistrierung entfernen: %w", err)
+	}
+	a.clearSessionLocked()
+	return nil
+}
+
 func (a *App) StartAuthorization(selectedIndices []int) (AuthorizationView, error) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
@@ -799,7 +925,7 @@ func matchEventGame(installations []discovery.Installation, launcher, externalGa
 }
 
 func releaseLauncherAdapter(value string) string {
-	return map[string]string{"steam": "steam", "ea-app": "ea_app", "ubisoft-connect": "ubisoft_connect"}[value]
+	return map[string]string{"steam": "steam", "ea-app": "ea_app", "ubisoft-connect": "ubisoft_connect", "standalone": "standalone"}[value]
 }
 
 func (a *App) persistEventSequence(eventID string, sequence int64) error {
@@ -836,6 +962,9 @@ func (a *App) runDiscovery(ctx context.Context) (discovery.Result, error) {
 		a.discoveryRun = run
 		go func(current *discoveryRun) {
 			current.result, current.err = a.discover()
+			if current.err == nil {
+				current.result = a.mergeManualGames(current.result)
+			}
 			a.discoveryMu.Lock()
 			if a.discoveryRun == current {
 				a.discoveryRun = nil
@@ -852,6 +981,35 @@ func (a *App) runDiscovery(ctx context.Context) (discovery.Result, error) {
 	case <-ctx.Done():
 		return discovery.Result{}, fmt.Errorf("Erkennung hat das Zeitlimit überschritten: %w", ctx.Err())
 	}
+}
+
+func (a *App) mergeManualGames(result discovery.Result) discovery.Result {
+	profile, err := deviceclient.LoadProfile(a.profilePath)
+	if err != nil {
+		result.Warnings = append(result.Warnings, "Manuell hinzugefügte Spiele konnten nicht aus dem geschützten Profil geladen werden.")
+		return result
+	}
+	for _, game := range profile.ManualGames {
+		if locationErr := a.validateManualExecutable(game.ExecutablePath); locationErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s liegt nicht mehr auf einem verfügbaren lokalen Laufwerk; wähle das Hauptprogramm erneut aus.", game.DisplayName))
+			continue
+		}
+		info, statErr := a.stat(game.ExecutablePath)
+		if statErr != nil || !info.Mode().IsRegular() {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s wurde nicht gefunden; wähle das Hauptprogramm erneut aus.", game.DisplayName))
+			continue
+		}
+		version, versionErr := a.fileVersion(game.ExecutablePath)
+		var detected *string
+		source := "manual-registration-unverified"
+		if versionErr == nil && strings.TrimSpace(version) != "" {
+			version = strings.TrimSpace(version)
+			detected = &version
+			source = "windows-file-version"
+		}
+		result.Installations = append(result.Installations, discovery.Installation{Launcher: "standalone", ExternalGameID: game.ExternalGameID, DisplayName: game.DisplayName, DetectedVersion: detected, VersionSource: source, InstallPath: filepath.Dir(game.ExecutablePath)})
+	}
+	return result
 }
 
 func (a *App) clearSessionLocked() {

@@ -21,12 +21,13 @@ Die installierte Variante ergänzt einen per-user Task-Scheduler-Start bei Anmel
 2. Falls nötig: einmaligen Enrollment-Code eingeben; lokales Ed25519-Schlüsselpaar erzeugen und privaten Schlüssel DPAPI-geschützt speichern.
 3. Aktives Event und signierte Sequenz laden; Signatur, Gültigkeit, Sequenz und Mindestclient prüfen.
 4. Spiele und erforderliche Launcher mit Speicherbedarf und Status anzeigen.
-5. Benutzer wählt Spiele. Erforderliche Komponenten sind klar gekennzeichnet.
-6. Für jeden fehlenden Launcher Wahl zwischen `unattended`, sofern verifiziert, und `manuell bestätigen`. Ablehnung bleibt möglich und erzeugt eine verständliche persistente Warnung.
-7. Downloads zeigen Gesamt-/Einzelfortschritt, Quelle, Geschwindigkeit, Restzeit, Pause/Fortsetzen und Abbrechen. Teilstände bleiben wiederaufnehmbar.
-8. Import/Installation erfolgt mit expliziter Zustimmung. UAC wird nur für die konkrete Aktion angefordert.
-9. Erkennung und Hash-/Launcherprüfung bestimmen den finalen Zustand `bereit`, `Warnung` oder `Aktion erforderlich`.
-10. Authentisierter Status wird an den Managementserver gemeldet.
+5. Kopierte oder manuell installierte Spiele werden ausschließlich an ein zuvor vom Admin angelegtes aktives Katalogspiel des festen Typs `standalone` („Ohne Launcher“) gebunden. Der Benutzer wählt dessen reguläre lokale `.exe` über den nativen Windows-Dateidialog. Die Registrierung mit Katalog-ID, Slug, Anzeigename und EXE-Pfad liegt DPAPI-CurrentUser-geschützt im Geräteprofil; UNC-Pfade, gemappte Netzlaufwerke, Windows-Gerätenamen, Alternate Data Streams und freie unbekannte Katalogeinträge sind unzulässig. Eine vorhandene Windows-Dateiversion wird übernommen, andernfalls bleibt die Version ausdrücklich unverifiziert.
+6. Benutzer wählt Spiele. Erforderliche Komponenten sind klar gekennzeichnet.
+7. Für jeden fehlenden Launcher Wahl zwischen `unattended`, sofern verifiziert, und `manuell bestätigen`. Ablehnung bleibt möglich und erzeugt eine verständliche persistente Warnung.
+8. Downloads zeigen Gesamt-/Einzelfortschritt, Quelle, Geschwindigkeit, Restzeit, Pause/Fortsetzen und Abbrechen. Teilstände bleiben wiederaufnehmbar.
+9. Import/Installation erfolgt mit expliziter Zustimmung. UAC wird nur für die konkrete Aktion angefordert.
+10. Erkennung und Hash-/Launcherprüfung bestimmen den finalen Zustand `bereit`, `Warnung` oder `Aktion erforderlich`.
+11. Authentisierter Status wird an den Managementserver gemeldet.
 
 ## Fehler- und Sicherheitsregeln
 

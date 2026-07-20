@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const maxProfileSize = 2 << 20
@@ -51,6 +52,14 @@ type Profile struct {
 	PrivateKey                                     ed25519.PrivateKey `json:"-"`
 	UpdateSequence                                 int64              `json:"-"`
 	EventSequences                                 map[string]int64   `json:"-"`
+	ManualGames                                    []ManualGame       `json:"-"`
+}
+
+type ManualGame struct {
+	CatalogGameID  int64  `json:"catalogGameId"`
+	ExternalGameID string `json:"externalGameId"`
+	DisplayName    string `json:"displayName"`
+	ExecutablePath string `json:"executablePath"`
 }
 
 type storedProfile struct {
@@ -66,6 +75,7 @@ type profilePayload struct {
 	PrivateKey     string           `json:"privateKey"`
 	UpdateSequence int64            `json:"updateSequence"`
 	EventSequences map[string]int64 `json:"eventSequences,omitempty"`
+	ManualGames    []ManualGame     `json:"manualGames,omitempty"`
 }
 
 func SaveProfile(path string, profile Profile) error {
@@ -75,7 +85,7 @@ func SaveProfile(path string, profile Profile) error {
 	if err := validateProfile(profile); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(profilePayload{ServerURL: profile.ServerURL, DeviceID: profile.DeviceID, DeviceName: profile.DeviceName, ClientVersion: profile.ClientVersion, PrivateKey: base64.RawStdEncoding.EncodeToString(profile.PrivateKey), UpdateSequence: profile.UpdateSequence, EventSequences: profile.EventSequences})
+	payload, err := json.Marshal(profilePayload{ServerURL: profile.ServerURL, DeviceID: profile.DeviceID, DeviceName: profile.DeviceName, ClientVersion: profile.ClientVersion, PrivateKey: base64.RawStdEncoding.EncodeToString(profile.PrivateKey), UpdateSequence: profile.UpdateSequence, EventSequences: profile.EventSequences, ManualGames: profile.ManualGames})
 	if err != nil {
 		return err
 	}
@@ -152,7 +162,7 @@ func LoadProfile(path string) (Profile, error) {
 	if err != nil {
 		return out, errors.New("protected device key is invalid")
 	}
-	out = Profile{ServerURL: payload.ServerURL, DeviceID: payload.DeviceID, DeviceName: payload.DeviceName, ClientVersion: payload.ClientVersion, PrivateKey: ed25519.PrivateKey(privateKey), UpdateSequence: payload.UpdateSequence, EventSequences: payload.EventSequences}
+	out = Profile{ServerURL: payload.ServerURL, DeviceID: payload.DeviceID, DeviceName: payload.DeviceName, ClientVersion: payload.ClientVersion, PrivateKey: ed25519.PrivateKey(privateKey), UpdateSequence: payload.UpdateSequence, EventSequences: payload.EventSequences, ManualGames: payload.ManualGames}
 	if err = validateProfile(out); err != nil {
 		return Profile{}, errors.New("protected device profile fields are invalid")
 	}
@@ -172,5 +182,61 @@ func validateProfile(profile Profile) error {
 			return errors.New("protected event sequence watermark is invalid")
 		}
 	}
+	if len(profile.ManualGames) > 256 {
+		return errors.New("too many manual game registrations")
+	}
+	seenManual := make(map[int64]struct{}, len(profile.ManualGames))
+	seenExternalIDs := make(map[string]struct{}, len(profile.ManualGames))
+	for _, game := range profile.ManualGames {
+		if game.CatalogGameID < 1 || len(game.ExternalGameID) > 64 || !standaloneSlugPattern.MatchString(game.ExternalGameID) || strings.TrimSpace(game.DisplayName) == "" || len(game.DisplayName) > 200 || ValidateManualExecutablePath(game.ExecutablePath) != nil {
+			return errors.New("manual game registration is invalid")
+		}
+		if _, duplicate := seenManual[game.CatalogGameID]; duplicate {
+			return errors.New("manual game registration is duplicated")
+		}
+		if _, duplicate := seenExternalIDs[game.ExternalGameID]; duplicate {
+			return errors.New("manual game external id is duplicated")
+		}
+		seenManual[game.CatalogGameID] = struct{}{}
+		seenExternalIDs[game.ExternalGameID] = struct{}{}
+	}
 	return nil
+}
+
+func ValidateManualExecutablePath(value string) error {
+	value = strings.TrimSpace(value)
+	if len(value) < 7 || len(value) > 4096 || value[1] != ':' || value[2] != '\\' && value[2] != '/' {
+		return errors.New("manual executable must use an absolute local drive path")
+	}
+	letter := value[0]
+	if (letter < 'A' || letter > 'Z') && (letter < 'a' || letter > 'z') {
+		return errors.New("manual executable drive is invalid")
+	}
+	normalized := strings.ReplaceAll(value, "/", "\\")
+	for _, character := range normalized {
+		if character < 0x20 || character == 0x7f {
+			return errors.New("manual executable path contains control characters")
+		}
+	}
+	if strings.Contains(normalized[2:], ":") || !strings.HasSuffix(strings.ToLower(normalized), ".exe") {
+		return errors.New("manual executable path is unsafe or is not an exe")
+	}
+	segments := strings.Split(normalized[3:], "\\")
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." || strings.TrimRight(segment, " .") != segment {
+			return errors.New("manual executable path is not canonical")
+		}
+		base := strings.ToUpper(strings.SplitN(segment, ".", 2)[0])
+		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+			return errors.New("manual executable path names a Windows device")
+		}
+	}
+	return nil
+}
+
+func ValidateManualExecutableLocation(value string) error {
+	if err := ValidateManualExecutablePath(value); err != nil {
+		return err
+	}
+	return validateManualExecutableDrive(value)
 }

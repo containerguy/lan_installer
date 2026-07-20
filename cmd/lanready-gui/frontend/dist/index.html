@@ -7,6 +7,7 @@
   <title>LANReady</title>
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" href="readiness.css">
+  <link rel="stylesheet" href="standalone.css">
   <link rel="stylesheet" href="accessibility.css">
   <script defer src="readiness.js"></script>
   <script defer src="app.js"></script>
@@ -87,7 +88,7 @@
         <div id="games-status" class="sr-only" role="status" aria-live="polite"></div>
         <div class="section-toolbar">
           <div><h2>Installierte Spiele</h2><p>Steam, EA App und Ubisoft Connect werden lokal geprüft.</p></div>
-          <div class="toolbar-actions"><button id="select-all-button" class="button button-ghost hidden">Alle auswählen</button><button id="clear-selection-button" class="button button-ghost hidden">Auswahl leeren</button><button id="discover-button" class="button button-primary">Spiele suchen</button></div>
+          <div class="toolbar-actions"><button id="manual-game-button" class="button button-ghost">Spiel manuell hinzufügen</button><button id="select-all-button" class="button button-ghost hidden">Alle auswählen</button><button id="clear-selection-button" class="button button-ghost hidden">Auswahl leeren</button><button id="discover-button" class="button button-primary">Spiele suchen</button></div>
         </div>
         <div id="games-error" class="persistent-error hidden" role="alert"><span id="games-error-text"></span><button id="games-retry" class="text-button">Erneut versuchen</button></div>
         <div id="warning-box" class="warning-box hidden"></div>
@@ -146,6 +147,18 @@
       <div class="consent-box"><strong>Übertragen werden</strong><ul><li>Launcher und externe Spiel-ID</li><li>erkannte Version und Anzeigename</li><li>lokaler Installationspfad</li></ul></div>
       <div id="confirm-error" class="form-error hidden" role="alert"></div>
       <div class="modal-actions"><button class="button button-ghost" data-close-modal>Abbrechen</button><button id="confirm-sync" class="button button-primary">Jetzt synchronisieren</button></div>
+    </section>
+
+    <section id="manual-game-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="manual-game-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">OHNE LAUNCHER</p><h2 id="manual-game-title">Kopiertes Spiel hinzufügen</h2><p>Wähle ein vom Admin vorbereitetes Katalogspiel und anschließend dessen Hauptprogramm. Unbekannte Spiele können hier nicht frei eingetragen werden.</p>
+      <form id="manual-game-form">
+        <label>Spiel aus dem Managementkatalog<select id="manual-game-catalog" required></select></label>
+        <label>Hauptprogramm<input id="manual-game-path" readonly required placeholder="Noch keine EXE ausgewählt"></label>
+        <button id="manual-game-browse" class="button button-ghost button-full" type="button">EXE auswählen</button>
+        <div id="manual-game-error" class="form-error hidden" role="alert"></div>
+        <button id="manual-game-save" class="button button-primary button-full" type="submit">Geschützt hinzufügen</button>
+      </form>
+      <p class="modal-note">LANReady speichert den Pfad im DPAPI-geschützten Benutzerprofil. Die Windows-Dateiversion wird nur verwendet, wenn sie in der EXE vorhanden ist.</p>
     </section>
   </div>
 

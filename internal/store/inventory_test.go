@@ -75,6 +75,35 @@ func TestDeviceAuthorizationAndInventory(t *testing.T) {
 	if got.Installations[1].DetectedVersion != nil {
 		t.Fatalf("unknown version was invented: %#v", got.Installations[1])
 	}
+	launchers, err := st.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var standaloneID int64
+	for _, launcher := range launchers {
+		if launcher.Adapter == "standalone" {
+			standaloneID = launcher.ID
+		}
+	}
+	if _, err = st.SaveGameAtomic(ctx, Game{Slug: "open-ra", Name: "OpenRA", LauncherID: standaloneID, Enabled: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	manualVersion := "2026.1"
+	manual := InventoryScan{ID: "manual-valid", ClientVersion: "0.4.0", ScannedAt: time.Now().UTC(), Installations: []InventoryInstallation{{Launcher: "standalone", ExternalGameID: "open-ra", DisplayName: "OpenRA", DetectedVersion: &manualVersion, VersionSource: "windows-file-version", InstallPath: `D:\\Games\\OpenRA`}}}
+	if err = st.SaveDeviceInventory(ctx, "device-1", token, manual); err != nil {
+		t.Fatalf("catalog-bound standalone inventory: %v", err)
+	}
+	manual.ID = "manual-unknown"
+	manual.Installations[0].ExternalGameID = "invented-game"
+	if err = st.SaveDeviceInventory(ctx, "device-1", token, manual); err == nil {
+		t.Fatal("free standalone inventory id was accepted")
+	}
+	manual.ID = "manual-source"
+	manual.Installations[0].ExternalGameID = "open-ra"
+	manual.Installations[0].VersionSource = "user-entered"
+	if err = st.SaveDeviceInventory(ctx, "device-1", token, manual); err == nil {
+		t.Fatal("unverified standalone version evidence was accepted")
+	}
 }
 
 func TestDeviceRuntimeVersionAcknowledgementIsMonotonic(t *testing.T) {

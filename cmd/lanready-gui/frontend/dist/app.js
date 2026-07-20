@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null };
+const state = { connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null, standaloneCatalog: [] };
 let modalReturnFocus = null;
 const $ = (id) => document.getElementById(id);
 const api = (name, ...args) => {
@@ -20,6 +20,9 @@ function bindEvents() {
   [$("connect-button"), $("hero-action"), $("next-action")].forEach((button) => button.addEventListener("click", primaryAction));
   $("hero-secondary").addEventListener("click", () => { showPage("games"); discover(); });
   [$("discover-button"), $("empty-discover")].forEach((button) => button.addEventListener("click", discover));
+  $("manual-game-button").addEventListener("click", openManualGame);
+  $("manual-game-browse").addEventListener("click", chooseManualExecutable);
+  $("manual-game-form").addEventListener("submit", saveManualGame);
   $("select-all-button").addEventListener("click", () => { state.selected = new Set((state.discovery?.installations || []).map((_, index) => index)); renderGames(); });
   $("clear-selection-button").addEventListener("click", () => { state.selected.clear(); renderGames(); });
   $("games-retry").addEventListener("click", discover);
@@ -114,6 +117,7 @@ function renderConnection() {
   $("hero-text").textContent = updateRequired ? "Der Server hat ein signiertes Pflichtupdate gemeldet. Spiele- und Synchronisationsfunktionen bleiben bis zur sicheren Aktualisierung gesperrt." : usable ? "Suche jetzt installierte Spiele. Vor jeder Übertragung siehst du die vollständige Auswahl und meldest dich persönlich an." : connected ? "Prüfe die Verbindung zum Managementserver erneut, bevor du fortfährst." : "Verbinde LANReady mit dem Managementserver. Danach findest du installierte Spiele und entscheidest selbst, was synchronisiert wird.";
   $("hero-action").textContent = updateRequired ? "Update-Status öffnen" : usable ? "Meine Spiele öffnen" : connected ? "Status erneut prüfen" : "PC verbinden";
   $("hero-secondary").classList.toggle("hidden", !usable);
+  $("manual-game-button").disabled = !usable;
   $("next-title").textContent = connected ? "Installierte Spiele finden" : "Managementserver verbinden";
   $("next-text").textContent = connected ? "LANReady erkennt Installationen von Steam, EA App und Ubisoft Connect lokal. Du entscheidest anschließend einzeln, welche Funde synchronisiert werden." : "Ein Admin erzeugt in der Weboberfläche einen einmaligen Enrollment-Code. Der private Geräteschlüssel bleibt geschützt in deinem Windows-Benutzerprofil.";
   $("next-action").innerHTML = connected ? "Spiele suchen <span>→</span>" : "Jetzt verbinden <span>→</span>";
@@ -226,7 +230,7 @@ function renderGames() {
   $("clear-selection-button").classList.toggle("hidden", installations.length === 0);
   $("game-count-badge").textContent = installations.length;
   $("games-empty-title").textContent = searched ? "Keine unterstützten Installationen gefunden" : "Noch keine Suche durchgeführt";
-  $("games-empty-copy").textContent = searched ? "Prüfe, ob Steam, EA App oder Ubisoft Connect für diesen Windows-Benutzer installiert sind, und starte die Suche erneut." : "LANReady durchsucht ausschließlich bekannte Launcher-Verzeichnisse und Registry-Einträge.";
+  $("games-empty-copy").textContent = searched ? "Prüfe Steam, EA App und Ubisoft Connect oder füge ein vom Admin vorbereitetes Spiel über „Spiel manuell hinzufügen“ hinzu." : "LANReady durchsucht bekannte Launcher und ergänzt kataloggebundene Spiele, die du manuell registriert hast.";
   $("games-list").replaceChildren(...installations.map((game, index) => gameCard(game, index)));
   const warnings = state.discovery?.warnings || [];
   $("warning-box").classList.toggle("hidden", warnings.length === 0);
@@ -235,8 +239,10 @@ function renderGames() {
 }
 
 function gameCard(game, index) {
-  const label = document.createElement("label"); label.className = "game-card";
+  const label = document.createElement("div"); label.className = "game-card";
+  if (game.launcher === "standalone") label.classList.add("manual-game-card");
   const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = state.selected.has(index);
+  checkbox.setAttribute("aria-label", `${game.displayName || game.externalGameId} auswählen`);
   checkbox.addEventListener("change", () => { checkbox.checked ? state.selected.add(index) : state.selected.delete(index); updateSelection(); });
   const icon = document.createElement("div"); icon.className = "game-icon"; icon.textContent = (game.launcher || "?").slice(0, 2);
   const info = document.createElement("div"); info.className = "game-info";
@@ -248,7 +254,50 @@ function gameCard(game, index) {
   meta.append(launcher, id, path); info.append(name, meta);
   const version = document.createElement("div"); version.className = "game-version"; version.textContent = game.detectedVersion || "Version unbekannt";
   const source = document.createElement("small"); source.textContent = game.versionSource || "Keine Versionsquelle"; version.append(source);
-  label.append(checkbox, icon, info, version); return label;
+  label.append(checkbox, icon, info, version);
+  if (game.launcher === "standalone") {
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "manual-remove"; remove.textContent = "Entfernen";
+    remove.addEventListener("click", () => removeManualGame(game)); label.append(remove);
+  }
+  return label;
+}
+
+async function openManualGame() {
+  if (!connectionUsable()) { setPersistentError("games", state.connection?.serverWarning || "Verbinde den Client zuerst mit dem Managementserver."); return; }
+  const button = $("manual-game-button"); setBusy(button, true, "Katalog wird geladen …"); setPersistentError("games", "");
+  try {
+    state.standaloneCatalog = await api("StandaloneCatalog");
+    const select = $("manual-game-catalog"); select.replaceChildren(...state.standaloneCatalog.map((game) => {
+      const option = document.createElement("option"); option.value = String(game.id); option.textContent = game.name; return option;
+    }));
+    $("manual-game-path").value = ""; setError("manual-game-error", "");
+    if (state.standaloneCatalog.length === 0) setError("manual-game-error", "Der Admin hat noch kein aktives Spiel vom Typ „Ohne Launcher“ angelegt.");
+    $("manual-game-save").disabled = state.standaloneCatalog.length === 0;
+    openModal("manual-game-modal");
+  } catch (error) { setPersistentError("games", errorText(error)); }
+  finally { setBusy(button, false, "Spiel manuell hinzufügen"); }
+}
+
+async function chooseManualExecutable() {
+  const button = $("manual-game-browse"); setBusy(button, true, "Dateiauswahl geöffnet …"); setError("manual-game-error", "");
+  try { const path = await api("ChooseManualExecutable"); if (path) $("manual-game-path").value = path; }
+  catch (error) { setError("manual-game-error", errorText(error)); }
+  finally { setBusy(button, false, "EXE auswählen"); }
+}
+
+async function saveManualGame(event) {
+  event.preventDefault(); const gameID = Number.parseInt($("manual-game-catalog").value, 10); const executablePath = $("manual-game-path").value;
+  if (!gameID || !executablePath) { setError("manual-game-error", "Bitte wähle ein Spiel und dessen Hauptprogramm aus."); return; }
+  const button = $("manual-game-save"); setBusy(button, true, "Wird geschützt gespeichert …"); setError("manual-game-error", "");
+  try { await api("SaveManualGame", {catalogGameId: gameID, executablePath}); closeModal(); await discover(); showToast("Spiel ohne Launcher wurde hinzugefügt."); }
+  catch (error) { setError("manual-game-error", errorText(error)); }
+  finally { setBusy(button, false, "Geschützt hinzufügen"); }
+}
+
+async function removeManualGame(game) {
+  if (!window.confirm(`${game.displayName} aus diesem Windows-Profil entfernen? Dateien des Spiels werden nicht gelöscht.`)) return;
+  try { await api("RemoveManualGame", game.externalGameId); await discover(); showToast("Manuelle Registrierung wurde entfernt."); }
+  catch (error) { setPersistentError("games", errorText(error)); }
 }
 
 function updateSelection() {
@@ -369,7 +418,7 @@ function addActivity(title, description) {
 function renderStats() {
   const count = state.discovery?.installations?.length;
   $("stat-games").textContent = Number.isInteger(count) ? count : "—";
-  $("stat-games-note").textContent = Number.isInteger(count) ? "Steam · EA · Ubisoft" : "Noch nicht gesucht";
+  $("stat-games-note").textContent = Number.isInteger(count) ? "Steam · EA · Ubisoft · Ohne Launcher" : "Noch nicht gesucht";
   updateSelection();
 }
 
@@ -453,4 +502,4 @@ function setBusy(button, busy, text) { button.disabled = busy; button.textConten
 function setError(id, message) { const box = $(id); box.textContent = message; box.classList.toggle("hidden", !message); }
 function setPersistentError(scope, message) { $(scope + "-error-text").textContent = message; $(scope + "-error").classList.toggle("hidden", !message); }
 function showToast(message, failure = false) { const toast = $("toast"); toast.textContent = message; toast.setAttribute("role", failure ? "alert" : "status"); toast.style.borderColor = failure ? "rgba(255,111,127,.3)" : ""; toast.style.background = failure ? "#301a25" : ""; toast.classList.remove("hidden"); setTimeout(() => toast.classList.add("hidden"), 5000); }
-function launcherName(value) { return ({steam:"Steam", ea_app:"EA App", ubisoft_connect:"Ubisoft Connect"})[value] || value; }
+function launcherName(value) { return ({steam:"Steam", ea_app:"EA App", ubisoft_connect:"Ubisoft Connect", standalone:"Ohne Launcher"})[value] || value; }

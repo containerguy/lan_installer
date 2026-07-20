@@ -24,3 +24,12 @@ test("event readiness rendering uses text nodes instead of HTML injection", () =
   assert.doesNotMatch(renderer, /innerHTML|insertAdjacentHTML/);
   assert.match(renderer, /textContent/);
 });
+
+test("standalone game flow is catalog-bound and accessible", () => {
+  for (const id of ["manual-game-button", "manual-game-modal", "manual-game-form", "manual-game-catalog", "manual-game-path", "manual-game-browse", "manual-game-save", "manual-game-error"]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`), `missing ${id}`);
+    assert.match(app, new RegExp(`["']${id}["']`), `app does not reference ${id}`);
+  }
+  assert.match(html, /Unbekannte Spiele können hier nicht frei eingetragen werden/);
+  assert.doesNotMatch(app.slice(app.indexOf("async function openManualGame"), app.indexOf("async function removeManualGame")), /innerHTML|insertAdjacentHTML/);
+});

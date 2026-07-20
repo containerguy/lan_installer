@@ -357,7 +357,8 @@
           "enum": [
             "steam",
             "ea-app",
-            "ubisoft-connect"
+            "ubisoft-connect",
+            "standalone"
           ]
         },
         "externalGameId": {

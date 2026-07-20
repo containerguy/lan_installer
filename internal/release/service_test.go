@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,8 @@ func TestServicePublishesOnlyTrustedValidatedRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte(`{"formatVersion":2,"eventId":"kellerlan-2026","releaseId":"01K0LANREADY00000000000002","sequence":1,"issuedAt":"2026-07-18T08:00:00Z","validUntil":"2026-07-20T08:00:00Z","minimumClientVersion":"0.1.0","artifacts":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1024,"mediaType":"application/octet-stream","fileName":"payload.zip"}],"launchers":[{"launcherId":"steam","version":"1.0","required":true,"actions":[{"adapter":"steam","operation":"install_launcher","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}],"games":[{"gameId":"cs2","name":"Counter-Strike 2","launcherId":"steam","version":"1","required":true,"payloads":[{"type":"archive","artifacts":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"actions":[{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","targetRoot":"steam_library","relativePath":"steamapps/common/cs2"}]}]}]}`)
+	now := time.Now().UTC()
+	payload := []byte(strings.NewReplacer("2026-07-18T08:00:00Z", now.Add(-time.Hour).Format(time.RFC3339), "2026-07-20T08:00:00Z", now.Add(48*time.Hour).Format(time.RFC3339)).Replace(`{"formatVersion":2,"eventId":"kellerlan-2026","releaseId":"01K0LANREADY00000000000002","sequence":1,"issuedAt":"2026-07-18T08:00:00Z","validUntil":"2026-07-20T08:00:00Z","minimumClientVersion":"0.1.0","artifacts":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1024,"mediaType":"application/octet-stream","fileName":"payload.zip"}],"launchers":[{"launcherId":"steam","version":"1.0","required":true,"actions":[{"adapter":"steam","operation":"install_launcher","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}],"games":[{"gameId":"cs2","name":"Counter-Strike 2","launcherId":"steam","version":"1","required":true,"payloads":[{"type":"archive","artifacts":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"actions":[{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","targetRoot":"steam_library","relativePath":"steamapps/common/cs2"}]}]}]}`))
 	envelope, err := protocol.SignEnvelope(payload, privateKey)
 	if err != nil {
 		t.Fatal(err)
