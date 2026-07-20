@@ -4,6 +4,16 @@ LANReady wird als selbst gehostete Plattform zum Vorbereiten von Windows-PCs fü
 
 LANReady speichert keine Launcher-Zugangsdaten und umgeht weder DRM noch Lizenzprüfungen. Kommerzielle Inhalte dürfen nur an Teilnehmer verteilt werden, die die erforderlichen Nutzungsrechte besitzen.
 
+## Dokumentation
+
+- [Dokumentationsübersicht](docs/README.md)
+- [Installation und Aktualisierung](docs/installation.md)
+- [Backup, Restore und Rollback](docs/backup-restore.md)
+- [Benutzerhandbuch für Web-UI und Windows-Client](docs/user-guide.md)
+- [MVP-Abnahmekriterien](docs/MVP_ACCEPTANCE.md)
+
+Die README bietet Schnellstart und technische Referenz. Für produktive Installation, Wiederherstellung und tägliche Bedienung sind die verlinkten Handbücher verbindlich.
+
 ## Was der MVP enthält
 
 - `LANReady.exe`: gestalteter portabler Windows-11-x64-Client für Enrollment, Erkennung und Inventarsynchronisation
@@ -95,7 +105,11 @@ Der private Schlüssel bleibt offline und gehört weder in den Servercontainer n
 docker compose --profile tools run --rm manifest keygen \
   -private-key lanready-private.key \
   -public-key lanready-public.key
+cp lanready-public.key secrets/release-public.key
+chmod 600 secrets/release-public.key
 ```
+
+Diese Wiederverwendung ist ausschließlich für den Entwicklungs-Schnellstart gedacht. Produktive Release-Schlüssel werden getrennt und wie in der [Installationsanleitung](docs/installation.md#3-konfiguration-und-secrets) beschrieben verwaltet.
 
 ### 3. Demo-Inhalt und Manifest vorbereiten
 
@@ -140,7 +154,7 @@ docker compose ps
 curl http://127.0.0.1:8080/healthz
 ```
 
-Die Web-UI ist anschließend direkt unter `https://HOST/` erreichbar; der Server leitet intern auf den geschützten Adminbereich weiter. Bei direktem lokalen HTTP-Test muss `LANREADY_SECURE_COOKIES=false` gesetzt werden; hinter Nginx Proxy Manager bleibt der sichere Standard `true`.
+Der lokale HTTP-Aufruf eignet sich nur für `/healthz`: `LANREADY_PUBLIC_URL` und der Windows-Client verlangen eine HTTPS-Origin. Für die Web-UI und Windows-Anwendung den Server nach der [Nginx-Proxy-Manager-Anleitung](docs/installation.md#6-installation-mit-nginx-proxy-manager) starten; dort werden beide Compose-Dateien verwendet und `LANREADY_SECURE_COOKIES=true` beibehalten.
 
 Erwartete Health-Antwort:
 
@@ -391,7 +405,7 @@ Admin darf Quellen speichern, deaktivieren und löschen; Operator darf Verbindun
 
 Der Katalog unter `/admin/catalog` verwaltet Launcher, Spiele, Versionen und Events. Steam, EA App und Ubisoft Connect sind als initiale Adapter angelegt; **Ohne Launcher** ist ein unveränderlicher Systemtyp für kopierte oder manuell installierte Spiele. Bei diesen Spielen erzwingt der Server den Spiel-Slug als stabile externe ID. Launcher- und Spielversionen zeigen ihren persistenten Cachezustand direkt in der Tabelle. Admin und Operator können einen Download einplanen, abbrechen, wiederholen oder ein bereits vorhandenes CAS-Artefakt erneut verifizieren. Der Worker lädt ausschließlich über HTTPS, wendet dieselbe DNS-/SSRF- und Redirect-Policy wie der Quellentest an, entfernt Basic-Auth bei Originwechseln und akzeptiert nur die bytegenaue Identität. Ist SHA-256 oder Größe noch leer, werden beide beim atomaren Import ermittelt und revisionsgesichert in die Version übernommen. Zugangsdaten werden dafür nur im Arbeitsspeicher entschlüsselt und weder Jobstatus noch Audit hinzugefügt. Die Erkennung ist implementiert; ihre Registry-/Dateisystempfade müssen vor der MVP-Abnahme noch auf realen Windows-11-Systemen mit den drei Launchern verifiziert werden.
 
-Unter `/admin/clients` können Administratoren einen zehn Minuten gültigen, genau einmal verwendbaren Enrollment-Code erzeugen. Registrierte Geräte erscheinen dort mit Windows-/Clientversion, letztem Kontakt und dem zuletzt authentisiert synchronisierten Spieleinventar. Die persönliche Freigabe erfolgt unter `/admin/device` per Browser-Einmalcode; das Benutzerpasswort wird nie an den nativen Client übertragen. Ein Inventarfund verändert den Katalog niemals automatisch: Nur ein Admin kann ihn ausdrücklich einem kompatiblen Katalogspiel zuordnen oder ein deaktiviertes Spiel samt erkannter Version als Entwurf anlegen. Quelle und relativer Paketpfad werden danach im Katalog ergänzt, bevor die Version installierbar wird. Erkennt ein späterer Scan einen anderen Build, bleibt die Spielzuordnung erhalten, aber die neue Version wird erst nach einem weiteren Admin-Klick als Entwurf übernommen.
+Unter `/admin/clients` können Administratoren einen zehn Minuten gültigen, genau einmal verwendbaren Enrollment-Code erzeugen. Registrierte Geräte erscheinen dort mit Windows-/Clientversion, letztem Kontakt und dem zuletzt authentisiert synchronisierten Spieleinventar. Die persönliche Freigabe erfolgt unter `/admin/device` per Browser-Einmalcode; das Benutzerpasswort wird nie an den nativen Client übertragen. Ein Inventarfund verändert den Katalog niemals automatisch: Nur ein Admin kann ihn ausdrücklich einem kompatiblen Katalogspiel zuordnen, bis zu 100 offene Funde atomar übernehmen oder ein deaktiviertes Spiel samt erkannter Version als Entwurf anlegen. Bei Steam-, EA- und Ubisoft-Spielen ist die Bezugsplattform bereits bekannt; eine zusätzliche LANReady-Paketquelle ist optional. Versionen des Systemtyps **Ohne Launcher** benötigen weiterhin eine externe Paketquelle. Erkennt ein späterer Scan einen anderen Build, bleibt die Spielzuordnung erhalten, aber die neue Version wird erst nach einem weiteren Admin-Klick als Entwurf übernommen.
 
 ## Reports abrufen
 

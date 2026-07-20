@@ -8,11 +8,11 @@ BASE_LDFLAGS := -s -w -X main.version=$(VERSION)
 GUI_LDFLAGS := $(BASE_LDFLAGS) -X main.releasePublicKey=$(RELEASE_PUBLIC_KEY) -X main.authenticodePublisherSHA256=$(AUTHENTICODE_PUBLISHER_SHA256)
 WAILS_PRODUCT_VERSION := $(shell node -p "require('./cmd/lanready-gui/wails.json').info.productVersion")
 
-.PHONY: all test web-test vet clean windows windows-gui windows-package check-windows-version linux
+.PHONY: all test web-test vet docs-check clean windows windows-gui windows-package check-windows-version linux
 
 all: test windows linux
 
-test: web-test
+test: docs-check web-test
 	go test ./...
 
 web-test:
@@ -28,6 +28,10 @@ web-test:
 
 vet:
 	go vet ./...
+
+docs-check:
+	python3 scripts/verify_docs.py
+	python3 -m unittest scripts.verify_docs_test scripts.lanready_secrets_test scripts.lanready_compose_paths_test
 
 windows:
 	mkdir -p bin

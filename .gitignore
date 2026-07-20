@@ -10,6 +10,8 @@
 *.key
 *.exe
 *.log
+__pycache__/
+*.py[cod]
 *:Zone.Identifier
 reports.ndjson
 .tmp-uiqa/
