@@ -15,7 +15,7 @@
   }
 
   function canShowAction(canEdit, item, job) {
-    return Boolean(canEdit && (item?.Enabled || isActive(job)));
+	return Boolean(canEdit && (isActive(job) || (item?.Enabled && Number(item?.SourceID || 0) > 0)));
   }
 
   return { isActive, becameTerminal, canShowAction };

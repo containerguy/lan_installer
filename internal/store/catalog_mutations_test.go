@@ -219,6 +219,65 @@ func TestEventGameCreateRequiresActiveChain(t *testing.T) {
 	}
 }
 
+func TestLauncherManagedGameVersionDoesNotRequirePackageSource(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "launcher-managed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	launchers, err := s.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steamID, standaloneID int64
+	for _, launcher := range launchers {
+		switch launcher.Adapter {
+		case "steam":
+			steamID = launcher.ID
+		case "standalone":
+			standaloneID = launcher.ID
+		}
+	}
+	steamGameID, err := s.SaveGameAtomic(ctx, Game{Slug: "age-of-empires-2-de", Name: "Age of Empires II: Definitive Edition", LauncherID: steamID, ExternalGameID: "813780", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := s.SaveGameVersionAtomic(ctx, GameVersion{GameID: steamGameID, Version: "101.103.25120.0", Enabled: true}, nil)
+	if err != nil {
+		t.Fatalf("Steam-managed version rejected: %v", err)
+	}
+	versions, err := s.GameVersions(ctx)
+	if err != nil || len(versions) != 1 || versions[0].ID != versionID || versions[0].SourceID != 0 || versions[0].LauncherAdapter != "steam" || versions[0].LauncherName != "Steam" {
+		t.Fatalf("launcher-managed version=%#v err=%v", versions, err)
+	}
+	eventID, err := s.SaveEventAtomic(ctx, Event{Slug: "lan", Name: "LAN", Status: "draft"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SaveEventGameAtomic(ctx, EventGame{EventID: eventID, GameVersionID: versionID, Required: true}, nil); err != nil {
+		t.Fatalf("launcher-managed version could not be assigned: %v", err)
+	}
+	if _, err = s.SaveGameAtomic(ctx, Game{ID: steamGameID, Revision: 1, Slug: "age-of-empires-2-de", Name: "Age of Empires II: Definitive Edition", LauncherID: standaloneID, Enabled: true}, nil); err == nil {
+		t.Fatal("game with package-less launcher version was switched to standalone")
+	} else {
+		var referenced *CatalogReferencedError
+		if !errors.As(err, &referenced) || referenced.Entity != "package-less game version" || referenced.References != 1 {
+			t.Fatalf("unexpected package-less reference error: %v", err)
+		}
+	}
+	standaloneGameID, err := s.SaveGameAtomic(ctx, Game{Slug: "portable-game", Name: "Portable Game", LauncherID: standaloneID, ExternalGameID: "portable-game", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SaveGameVersionAtomic(ctx, GameVersion{GameID: standaloneGameID, Version: "1", Enabled: true}, nil); err == nil {
+		t.Fatal("standalone version without package source accepted")
+	}
+	if _, err = s.SaveGameVersionAtomic(ctx, GameVersion{GameID: steamGameID, Version: "invalid-package", SourcePath: "game.zip", Enabled: true}, nil); err == nil {
+		t.Fatal("launcher-managed version accepted orphan package metadata")
+	}
+}
+
 func TestPublishedEventLocksReferencedGraph(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(filepath.Join(t.TempDir(), "published-graph.db"))

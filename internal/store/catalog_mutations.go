@@ -268,6 +268,15 @@ func (s *Store) SaveGameAtomic(ctx context.Context, value Game, audit *AuditEntr
 		}
 		launcherChanged = existingLauncherID != value.LauncherID
 		externalIDChanged = existingExternalID != value.ExternalGameID
+		if targetAdapter == "standalone" && existingAdapter != "standalone" {
+			var packageLessVersions int64
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM game_versions WHERE game_id=? AND source_id IS NULL`, value.ID).Scan(&packageLessVersions); err != nil {
+				return 0, err
+			}
+			if packageLessVersions > 0 {
+				return 0, &CatalogReferencedError{Entity: "package-less game version", References: packageLessVersions}
+			}
+		}
 		if launcherChanged || externalIDChanged {
 			var incompatibleMappings int64
 			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM inventory_catalog_mappings m JOIN launchers l ON l.id=? WHERE m.game_id=? AND (m.launcher<>l.adapter OR m.external_game_id<>?)`, value.LauncherID, value.ID, value.ExternalGameID).Scan(&incompatibleMappings); err != nil {
@@ -380,14 +389,21 @@ func (s *Store) SaveGameVersionAtomic(ctx context.Context, value GameVersion, au
 	if value.Version, err = normalizeCatalogText(value.Version, 256); err != nil {
 		return 0, err
 	}
-	if value.SourcePath, err = normalizeArtifactPath(value.SourcePath); err != nil {
-		return 0, err
+	if value.GameID < 1 || value.SourceID < 0 || value.SizeBytes < 0 {
+		return 0, errors.New("game and a non-negative size are required")
 	}
-	if value.SHA256, err = normalizeSHA256(value.SHA256); err != nil {
-		return 0, err
-	}
-	if value.GameID < 1 || value.SourceID < 1 || value.SizeBytes < 0 {
-		return 0, errors.New("game, source and a non-negative size are required")
+	if value.SourceID > 0 {
+		if value.SourcePath, err = normalizeArtifactPath(value.SourcePath); err != nil {
+			return 0, err
+		}
+		if value.SHA256, err = normalizeSHA256(value.SHA256); err != nil {
+			return 0, err
+		}
+	} else {
+		if strings.TrimSpace(value.SourcePath) != "" || strings.TrimSpace(value.SHA256) != "" || value.SizeBytes != 0 {
+			return 0, errors.New("launcher-managed game versions cannot contain LANReady package metadata")
+		}
+		value.SourcePath, value.SHA256 = "", ""
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -407,7 +423,7 @@ func (s *Store) SaveGameVersionAtomic(ctx context.Context, value GameVersion, au
 			return 0, err
 		}
 		gameChanged = existingGameID != value.GameID
-		sourceChanged = !existingSourceID.Valid || existingSourceID.Int64 != value.SourceID
+		sourceChanged = existingSourceID.Valid != (value.SourceID > 0) || existingSourceID.Valid && existingSourceID.Int64 != value.SourceID
 		if gameChanged {
 			var incompatibleMappings int64
 			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM inventory_catalog_version_mappings vm JOIN inventory_catalog_mappings m ON m.launcher=vm.launcher AND m.external_game_id=vm.external_game_id WHERE vm.game_version_id=? AND m.game_id<>?`, value.ID, value.GameID).Scan(&incompatibleMappings); err != nil {
@@ -423,7 +439,16 @@ func (s *Store) SaveGameVersionAtomic(ctx context.Context, value GameVersion, au
 			return 0, err
 		}
 	}
-	if sourceChanged {
+	var launcherAdapter string
+	if err = tx.QueryRowContext(ctx, `SELECT l.adapter FROM games g JOIN launchers l ON l.id=g.launcher_id WHERE g.id=?`, value.GameID).Scan(&launcherAdapter); errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrCatalogNotFound
+	} else if err != nil {
+		return 0, err
+	}
+	if value.SourceID == 0 && launcherAdapter == "standalone" {
+		return 0, errors.New("standalone game versions require a LANReady package source")
+	}
+	if sourceChanged && value.SourceID > 0 {
 		if err = requireActiveCatalogParent(ctx, tx, `SELECT enabled FROM sources WHERE id=?`, value.SourceID, "source"); err != nil {
 			return 0, err
 		}
@@ -439,9 +464,9 @@ func (s *Store) SaveGameVersionAtomic(ctx context.Context, value GameVersion, au
 	}
 	var result sql.Result
 	if value.ID == 0 {
-		result, err = tx.ExecContext(ctx, `INSERT INTO game_versions(game_id,version,source_id,source_path,sha256,size_bytes,enabled) VALUES(?,?,?,?,?,?,?)`, value.GameID, value.Version, value.SourceID, value.SourcePath, value.SHA256, value.SizeBytes, value.Enabled)
+		result, err = tx.ExecContext(ctx, `INSERT INTO game_versions(game_id,version,source_id,source_path,sha256,size_bytes,enabled) VALUES(?,?,NULLIF(?,0),?,?,?,?)`, value.GameID, value.Version, value.SourceID, value.SourcePath, value.SHA256, value.SizeBytes, value.Enabled)
 	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE game_versions SET game_id=?,version=?,source_id=?,source_path=?,sha256=?,size_bytes=?,enabled=?,revision=revision+1 WHERE id=? AND revision=?`, value.GameID, value.Version, value.SourceID, value.SourcePath, value.SHA256, value.SizeBytes, value.Enabled, value.ID, value.Revision)
+		result, err = tx.ExecContext(ctx, `UPDATE game_versions SET game_id=?,version=?,source_id=NULLIF(?,0),source_path=?,sha256=?,size_bytes=?,enabled=?,revision=revision+1 WHERE id=? AND revision=?`, value.GameID, value.Version, value.SourceID, value.SourcePath, value.SHA256, value.SizeBytes, value.Enabled, value.ID, value.Revision)
 	}
 	if err != nil {
 		return 0, err
@@ -654,7 +679,9 @@ func (s *Store) SaveEventGameAtomic(ctx context.Context, value EventGame, audit 
 	}
 	if value.Revision == 0 {
 		var gameVersionEnabled, gameEnabled, launcherEnabled, sourceEnabled bool
-		err = tx.QueryRowContext(ctx, `SELECT gv.enabled,g.enabled,l.enabled,s.enabled FROM game_versions gv JOIN games g ON g.id=gv.game_id JOIN launchers l ON l.id=g.launcher_id JOIN sources s ON s.id=gv.source_id WHERE gv.id=?`, value.GameVersionID).Scan(&gameVersionEnabled, &gameEnabled, &launcherEnabled, &sourceEnabled)
+		var sourceID sql.NullInt64
+		var launcherAdapter string
+		err = tx.QueryRowContext(ctx, `SELECT gv.enabled,g.enabled,l.enabled,gv.source_id,COALESCE(s.enabled,0),l.adapter FROM game_versions gv JOIN games g ON g.id=gv.game_id JOIN launchers l ON l.id=g.launcher_id LEFT JOIN sources s ON s.id=gv.source_id WHERE gv.id=?`, value.GameVersionID).Scan(&gameVersionEnabled, &gameEnabled, &launcherEnabled, &sourceID, &sourceEnabled, &launcherAdapter)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrCatalogNotFound
 		}
@@ -668,8 +695,10 @@ func (s *Store) SaveEventGameAtomic(ctx context.Context, value EventGame, audit 
 			return errors.New("disabled game cannot be assigned")
 		case !launcherEnabled:
 			return errors.New("disabled launcher cannot be assigned")
-		case !sourceEnabled:
+		case sourceID.Valid && !sourceEnabled:
 			return errors.New("disabled source cannot be assigned")
+		case !sourceID.Valid && launcherAdapter == "standalone":
+			return errors.New("standalone game version has no package source")
 		}
 	}
 	var result sql.Result

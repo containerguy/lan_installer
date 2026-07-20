@@ -14,6 +14,19 @@ import (
 
 var ErrInventoryCatalogConflict = errors.New("inventory item has a conflicting catalog mapping")
 
+const MaxInventoryCatalogBatch = 100
+
+type InventoryCatalogBatchError struct {
+	Position int
+	Err      error
+}
+
+func (e *InventoryCatalogBatchError) Error() string {
+	return fmt.Sprintf("inventory position %d: %v", e.Position, e.Err)
+}
+
+func (e *InventoryCatalogBatchError) Unwrap() error { return e.Err }
+
 type InventoryCatalogImport struct {
 	DeviceID, ScanID    string
 	Position            int
@@ -39,18 +52,59 @@ type inventoryImportFingerprint struct {
 // game or creates a disabled game/version draft. A draft version intentionally
 // has no source until an administrator completes it in the catalog editor.
 func (s *Store) ImportInventoryItem(ctx context.Context, value InventoryCatalogImport, audit *AuditEntry) (InventoryCatalogImportResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InventoryCatalogImportResult{}, err
+	}
+	defer tx.Rollback()
+	out, err := s.importInventoryItemTx(ctx, tx, value, audit)
+	if err != nil {
+		return InventoryCatalogImportResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return InventoryCatalogImportResult{}, err
+	}
+	return out, nil
+}
+
+// ImportInventoryItems applies a bounded set of explicit inventory imports in
+// one transaction. Any stale, conflicting or invalid item rolls the full batch
+// back so the administrator never has to infer which subset was committed.
+func (s *Store) ImportInventoryItems(ctx context.Context, values []InventoryCatalogImport, audit *AuditEntry) ([]InventoryCatalogImportResult, error) {
+	if len(values) == 0 || len(values) > MaxInventoryCatalogBatch {
+		return nil, fmt.Errorf("inventory import batch must contain 1 to %d items", MaxInventoryCatalogBatch)
+	}
+	if audit == nil || audit.ActorUserID < 1 {
+		return nil, errors.New("inventory import actor is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	results := make([]InventoryCatalogImportResult, 0, len(values))
+	for _, value := range values {
+		result, importErr := s.importInventoryItemTx(ctx, tx, value, audit)
+		if importErr != nil {
+			return nil, &InventoryCatalogBatchError{Position: value.Position, Err: importErr}
+		}
+		results = append(results, result)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *Store) importInventoryItemTx(ctx context.Context, tx *sql.Tx, value InventoryCatalogImport, audit *AuditEntry) (InventoryCatalogImportResult, error) {
 	var out InventoryCatalogImportResult
+	var err error
 	value.DeviceID = strings.TrimSpace(value.DeviceID)
 	value.ScanID = strings.TrimSpace(value.ScanID)
 	value.Version = strings.TrimSpace(value.Version)
 	if value.DeviceID == "" || value.ScanID == "" || value.Position < 0 || value.Position > 9999 || audit == nil || audit.ActorUserID < 1 {
 		return out, errors.New("device, scan, position and actor are required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return out, err
-	}
-	defer tx.Rollback()
 
 	var launcher, externalID, detectedName string
 	var detectedVersion sql.NullString
@@ -104,7 +158,7 @@ func (s *Store) ImportInventoryItem(ctx context.Context, value InventoryCatalogI
 			return s.importDetectedVersion(ctx, tx, value, launcher, externalID, detectedRaw, requestHash[:], out, audit)
 		}
 		if bytes.Equal(existingHash, requestHash[:]) {
-			return out, tx.Commit()
+			return out, nil
 		}
 		return InventoryCatalogImportResult{}, ErrInventoryCatalogConflict
 	}
@@ -139,6 +193,9 @@ func (s *Store) ImportInventoryItem(ctx context.Context, value InventoryCatalogI
 			}
 		}
 	} else {
+		if launcher == "standalone" {
+			return out, errors.New("standalone inventory must be linked to its existing catalog game")
+		}
 		var launcherEnabled bool
 		if err = tx.QueryRowContext(ctx, `SELECT enabled FROM launchers WHERE id=?`, launcherID).Scan(&launcherEnabled); err != nil {
 			return out, err
@@ -180,9 +237,6 @@ func (s *Store) ImportInventoryItem(ctx context.Context, value InventoryCatalogI
 	if err = saveInventoryImportAudit(ctx, tx, value, launcher, externalID, out, audit); err != nil {
 		return InventoryCatalogImportResult{}, err
 	}
-	if err = tx.Commit(); err != nil {
-		return InventoryCatalogImportResult{}, err
-	}
 	return out, nil
 }
 
@@ -191,7 +245,7 @@ func (s *Store) importDetectedVersion(ctx context.Context, tx *sql.Tx, value Inv
 	err := tx.QueryRowContext(ctx, `SELECT game_version_id,request_hash FROM inventory_catalog_version_mappings WHERE launcher=? AND external_game_id=? AND detected_version=?`, launcher, externalID, detectedRaw).Scan(&out.GameVersionID, &existingHash)
 	if err == nil {
 		if bytes.Equal(existingHash, requestHash) {
-			return out, tx.Commit()
+			return out, nil
 		}
 		return InventoryCatalogImportResult{}, ErrInventoryCatalogConflict
 	}
@@ -214,9 +268,6 @@ func (s *Store) importDetectedVersion(ctx context.Context, tx *sql.Tx, value Inv
 		return InventoryCatalogImportResult{}, err
 	}
 	if err = saveInventoryImportAudit(ctx, tx, value, launcher, externalID, out, audit); err != nil {
-		return InventoryCatalogImportResult{}, err
-	}
-	if err = tx.Commit(); err != nil {
 		return InventoryCatalogImportResult{}, err
 	}
 	return out, nil

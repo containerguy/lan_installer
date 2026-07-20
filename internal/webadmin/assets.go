@@ -17,6 +17,9 @@ var catalogJS []byte
 //go:embed assets/catalog_cache_helpers.js
 var catalogCacheHelpersJS []byte
 
+//go:embed assets/clients.js
+var clientsJS []byte
+
 func managementCSSAsset(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -39,4 +42,10 @@ func catalogCacheHelpersJSAsset(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(catalogCacheHelpersJS)
+}
+
+func clientsJSAsset(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(clientsJS)
 }

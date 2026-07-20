@@ -65,7 +65,7 @@ const catalogPageHTML = `<!doctype html>
 <meta name="can-delete" content="{{.CanDelete}}">
 <meta name="can-publish" content="{{.CanPublish}}">
 <title>Katalog · LANReady</title>
-<link rel="stylesheet" href="/admin/assets/management.css?v=20260718-4">
+<link rel="stylesheet" href="/admin/assets/management.css?v=20260720-2">
 </head>
 <body>
 <div class="shell">
@@ -147,9 +147,10 @@ const catalogPageHTML = `<!doctype html>
 
         <label class="field" data-kinds="launcher-version"><span>Launcher <span class="required-mark" aria-hidden="true">*</span></span><select class="select" id="version-launcher" aria-required="true" aria-describedby="version-launcher-error"></select><small class="field-error" id="version-launcher-error"></small></label>
         <label class="field" data-kinds="game-version"><span>Spiel <span class="required-mark" aria-hidden="true">*</span></span><select class="select" id="version-game" aria-required="true" aria-describedby="version-game-error"></select><small class="field-error" id="version-game-error"></small></label>
+        <label class="field" data-kinds="game-version"><span>Bezugsplattform</span><input class="input" id="entity-provider" readonly aria-readonly="true"><small class="field-hint">Ergibt sich aus dem Launcher des Spiels und ist nicht die optionale LANReady-Paketquelle.</small></label>
         <label class="field" data-kinds="launcher-version game-version"><span>Version <span class="required-mark" aria-hidden="true">*</span></span><input class="input" id="entity-version" maxlength="256" autocomplete="off" aria-required="true" aria-describedby="entity-version-error"><small class="field-error" id="entity-version-error"></small></label>
-        <label class="field" data-kinds="launcher-version game-version"><span>Quelle <span class="required-mark" aria-hidden="true">*</span></span><select class="select" id="entity-source" aria-required="true" aria-describedby="entity-source-error"></select><small class="field-error" id="entity-source-error"></small></label>
-        <label class="field wide" data-kinds="launcher-version game-version"><span>Relativer Quellpfad <span class="required-mark" aria-hidden="true">*</span></span><input class="input" id="entity-path" maxlength="1024" placeholder="spiele/cs2/package.zip" autocomplete="off" aria-required="true" aria-describedby="entity-path-error"><small class="field-error" id="entity-path-error"></small></label>
+        <label class="field" data-kinds="launcher-version game-version"><span>LANReady-Paketquelle <span class="required-mark source-required-mark" aria-hidden="true">*</span></span><select class="select" id="entity-source" aria-describedby="entity-source-error"></select><small class="field-hint" id="entity-source-hint">Externe HTTPS-/WebDAV-Quelle, aus der LANReady ein eigenes Paket cachen kann.</small><small class="field-error" id="entity-source-error"></small></label>
+        <label class="field wide" data-kinds="launcher-version game-version"><span>Relativer Paketpfad <span class="required-mark source-required-mark" aria-hidden="true">*</span></span><input class="input" id="entity-path" maxlength="1024" placeholder="spiele/cs2/package.zip" autocomplete="off" aria-describedby="entity-path-error"><small class="field-error" id="entity-path-error"></small></label>
         <label class="field wide" data-kinds="launcher-version game-version"><span>SHA-256</span><input class="input mono" id="entity-sha" maxlength="64" pattern="[0-9a-fA-F]{64}" autocomplete="off"><small class="field-hint">Darf bis zum Import leer bleiben; ein Event kann so noch nicht veröffentlicht werden.</small><small class="field-error" id="entity-sha-error"></small></label>
         <label class="field" data-kinds="launcher-version game-version"><span>Größe in Bytes</span><input class="input" id="entity-size" type="number" min="0" step="1" value="0"><small class="field-error" id="entity-size-error"></small></label>
         <label class="field" data-kinds="launcher-version"><span>Silent-Argumente</span><input class="input mono" id="entity-silent-args" readonly aria-readonly="true" placeholder="Noch nicht verifiziert"><small class="field-hint">Nur Anzeige. LANReady übernimmt Argumente ausschließlich aus einer späteren Windows-Verifikation.</small></label>

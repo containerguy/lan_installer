@@ -8,12 +8,42 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/containerguy/lan_installer/internal/store"
 )
 
 var idempotencyKeyPattern = regexp.MustCompile(`(?i)^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9A-HJKMNP-TV-Z]{26})$`)
+
+func (a *Admin) idempotentFormPost(route string, next http.HandlerFunc) http.HandlerFunc {
+	protected := a.idempotentPost(route, next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if err := r.ParseForm(); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "Formulardaten überschreiten das erlaubte Limit.", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "Formulardaten sind ungültig", http.StatusBadRequest)
+			return
+		}
+		key := r.PostForm.Get("idempotency_key")
+		if key == "" {
+			http.Error(w, "Wiederholungsschutz fehlt; lade die Clientseite neu.", http.StatusBadRequest)
+			return
+		}
+		encoded := r.PostForm.Encode()
+		r.Header.Set("Idempotency-Key", key)
+		r.Body = io.NopCloser(strings.NewReader(encoded))
+		r.ContentLength = int64(len(encoded))
+		r.Header.Set("Content-Length", strconv.Itoa(len(encoded)))
+		r.Form, r.PostForm = nil, nil
+		protected(w, r)
+	}
+}
 
 func (a *Admin) idempotentPost(route string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

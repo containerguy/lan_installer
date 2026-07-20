@@ -27,7 +27,6 @@ function bindEvents() {
   $("clear-selection-button").addEventListener("click", () => { state.selected.clear(); renderGames(); });
   $("games-retry").addEventListener("click", discover);
   $("global-retry").addEventListener("click", loadState);
-  $("global-reset").addEventListener("click", resetLocalProfile);
   $("enroll-form").addEventListener("submit", enroll);
   $("sync-button").addEventListener("click", startAuthorization);
   $("confirm-sync").addEventListener("click", syncInventory);
@@ -54,7 +53,7 @@ async function loadState() {
     renderStats();
     if (state.connection?.serverWarning) setPersistentError("global", state.connection.serverWarning);
   }
-  catch (error) { state.connection = null; setPersistentError("global", errorText(error)); $("global-reset").classList.remove("hidden"); }
+  catch (error) { state.connection = null; setPersistentError("global", errorText(error) + " Das lokale Geräteprofil bleibt unverändert; versuche es erneut."); }
   finally { setStateLoading(false); }
 	return state.connection !== null;
 }
@@ -72,14 +71,6 @@ function invalidateClientWorkflow() {
   state.discovery = null;
   state.selected.clear();
   closeModal(true);
-}
-
-async function resetLocalProfile() {
-  if (!window.confirm("Das lokale LANReady-Geräteprofil dieses Windows-Benutzers löschen? Anschließend ist ein neuer Enrollment-Code erforderlich.")) return;
-  $("global-reset").disabled = true;
-  try { await api("Disconnect"); await loadState(); }
-  catch (error) { setPersistentError("global", errorText(error)); }
-  finally { $("global-reset").disabled = false; }
 }
 
 function setStateLoading(loading) {

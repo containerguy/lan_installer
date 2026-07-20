@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -131,6 +133,167 @@ func TestStateWithoutProfileIsDisconnected(t *testing.T) {
 	}
 	if state.Connected || state.ServerURL != DefaultServerURL || state.ClientVersion != "1.2.3" {
 		t.Fatalf("unexpected state: %#v", state)
+	}
+}
+
+func TestProfilePathIsStableAcrossPortableExecutableLocations(t *testing.T) {
+	configRoot := t.TempDir()
+	first, err := profilePathFromConfigRoot(configRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := profilePathFromConfigRoot(configRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(configRoot, "LANReady", "device.json")
+	if first != want || second != want {
+		t.Fatalf("profile path changed between portable versions: first=%q second=%q want=%q", first, second, want)
+	}
+	for _, invalid := range []string{"", ".", "portable-build-folder"} {
+		if path, pathErr := profilePathFromConfigRoot(invalid); pathErr == nil || path != "" {
+			t.Fatalf("relative fallback accepted for %q: path=%q err=%v", invalid, path, pathErr)
+		}
+	}
+}
+
+func TestLegacyPortableProfileMigratesOnceAndSurvivesExecutableMove(t *testing.T) {
+	configRoot := t.TempDir()
+	firstExecutableDir := filepath.Join(t.TempDir(), "LANReady-Portable-Old")
+	secondExecutableDir := filepath.Join(t.TempDir(), "LANReady-Portable-New")
+	if err := os.MkdirAll(firstExecutableDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(firstExecutableDir, "lanready-device.json")
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "stable-device", DeviceName: "Gaming-PC", ClientVersion: "0.1.0", PrivateKey: privateKey}
+	if err = deviceclient.SaveProfile(legacyPath, want); err != nil {
+		t.Fatal(err)
+	}
+	firstPath, err := resolveDefaultProfilePath(configRoot, []string{firstExecutableDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath, err := resolveDefaultProfilePath(configRoot, []string{secondExecutableDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPath != secondPath || firstPath != filepath.Join(configRoot, "LANReady", "device.json") {
+		t.Fatalf("profile moved with executable: first=%q second=%q", firstPath, secondPath)
+	}
+	got, err := deviceclient.LoadProfile(secondPath)
+	if err != nil || got.DeviceID != want.DeviceID || !got.PrivateKey.Equal(want.PrivateKey) {
+		t.Fatalf("migrated profile=%#v err=%v", got, err)
+	}
+	if _, err = os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy profile remained after migration: %v", err)
+	}
+}
+
+func TestLegacyProfileMigratesWhenUserConfigDirFails(t *testing.T) {
+	homeRoot := t.TempDir()
+	legacyDir := filepath.Join(t.TempDir(), "LANReady-Portable-Legacy")
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(legacyDir, "lanready-device.json")
+	if err = deviceclient.SaveProfile(legacyPath, deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "legacy-device", DeviceName: "PC", ClientVersion: "0.1.0", PrivateKey: privateKey}); err != nil {
+		t.Fatal(err)
+	}
+	stable, err := resolveDefaultProfilePathFromUserDirs("", errors.New("APPDATA fehlt"), homeRoot, nil, []string{legacyDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(homeRoot, "AppData", "Roaming", "LANReady", "device.json")
+	profile, err := deviceclient.LoadProfile(stable)
+	if err != nil || stable != want || profile.DeviceID != "legacy-device" || !profile.PrivateKey.Equal(privateKey) {
+		t.Fatalf("fallback migration path=%q profile=%#v err=%v", stable, profile, err)
+	}
+}
+
+func TestNewPortableFindsLegacyProfileInPreviousDownloadsFolder(t *testing.T) {
+	homeRoot := t.TempDir()
+	oldDir := filepath.Join(homeRoot, "Downloads", "LANReady-Portable-Old")
+	newDir := filepath.Join(homeRoot, "Downloads", "LANReady-Portable-New")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = deviceclient.SaveProfile(filepath.Join(oldDir, "lanready-device.json"), deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "old-portable-device", DeviceName: "PC", ClientVersion: "0.1.0", PrivateKey: privateKey}); err != nil {
+		t.Fatal(err)
+	}
+	searchDirs := append([]string{newDir}, commonLegacyProfileDirs(homeRoot, 2, 10000)...)
+	stable, err := resolveDefaultProfilePathFromUserDirs(filepath.Join(homeRoot, "AppData", "Roaming"), nil, homeRoot, nil, searchDirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := deviceclient.LoadProfile(stable)
+	if err != nil || profile.DeviceID != "old-portable-device" || !profile.PrivateKey.Equal(privateKey) {
+		t.Fatalf("new portable did not recover old identity: %#v err=%v", profile, err)
+	}
+}
+
+func TestLegacyMigrationRejectsCopiesWithDifferentAntiRollbackState(t *testing.T) {
+	homeRoot := t.TempDir()
+	firstDir := filepath.Join(homeRoot, "Downloads", "LANReady-Old-A")
+	secondDir := filepath.Join(homeRoot, "Downloads", "LANReady-Old-B")
+	for _, dir := range []string{firstDir, secondDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "same-device", DeviceName: "PC", ClientVersion: "0.1.0", PrivateKey: privateKey, UpdateSequence: 4, EventSequences: map[string]int64{"lan": 7}}
+	if err = deviceclient.SaveProfile(filepath.Join(firstDir, "lanready-device.json"), base); err != nil {
+		t.Fatal(err)
+	}
+	older := base
+	older.UpdateSequence = 3
+	older.EventSequences = map[string]int64{"lan": 6}
+	if err = deviceclient.SaveProfile(filepath.Join(secondDir, "lanready-device.json"), older); err != nil {
+		t.Fatal(err)
+	}
+	stable, err := resolveDefaultProfilePath(filepath.Join(homeRoot, "AppData", "Roaming"), commonLegacyProfileDirs(homeRoot, 2, 10000))
+	if err == nil || !strings.Contains(err.Error(), "mehrere unterschiedliche") {
+		t.Fatalf("ambiguous anti-rollback profiles accepted: path=%q err=%v", stable, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(homeRoot, "AppData", "Roaming", "LANReady", "device.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stable profile was written despite ambiguity: %v", statErr)
+	}
+}
+
+func TestLegacyMigrationRejectsSymlinkCandidate(t *testing.T) {
+	configRoot := t.TempDir()
+	legacyDir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "device.json")
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = deviceclient.SaveProfile(target, deviceclient.Profile{ServerURL: "https://manager.example", DeviceID: "device", DeviceName: "PC", ClientVersion: "0.1.0", PrivateKey: privateKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(target, filepath.Join(legacyDir, "lanready-device.json")); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, err = resolveDefaultProfilePath(configRoot, []string{legacyDir}); err == nil || !strings.Contains(err.Error(), "keine reguläre Datei") {
+		t.Fatalf("symlinked legacy profile accepted: %v", err)
 	}
 }
 

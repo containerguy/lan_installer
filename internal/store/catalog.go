@@ -24,9 +24,9 @@ type WebDAVConfig struct {
 	SecretNonce, SecretCiphertext []byte
 }
 type Game struct {
-	ID, Revision, LauncherID                 int64
-	Slug, Name, LauncherName, ExternalGameID string
-	Enabled                                  bool
+	ID, Revision, LauncherID                                  int64
+	Slug, Name, LauncherName, LauncherAdapter, ExternalGameID string
+	Enabled                                                   bool
 }
 type StandaloneGame struct {
 	ID             int64    `json:"id"`
@@ -45,12 +45,12 @@ type LauncherVersion struct {
 	Enabled, SilentArgsVerified    bool
 }
 type GameVersion struct {
-	ID, Revision, GameID           int64
-	GameName, Version              string
-	SourceID                       int64
-	SourceName, SourcePath, SHA256 string
-	SizeBytes                      int64
-	Enabled                        bool
+	ID, Revision, GameID                             int64
+	GameName, LauncherName, LauncherAdapter, Version string
+	SourceID                                         int64
+	SourceName, SourcePath, SHA256                   string
+	SizeBytes                                        int64
+	Enabled                                          bool
 }
 type Event struct {
 	ID, Revision                         int64
@@ -95,7 +95,7 @@ func (s *Store) Sources(ctx context.Context) ([]Source, error) {
 	return out, rows.Err()
 }
 func (s *Store) Games(ctx context.Context) ([]Game, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.revision,g.launcher_id,g.slug,g.name,l.name,g.external_game_id,g.enabled FROM games g JOIN launchers l ON l.id=g.launcher_id ORDER BY g.name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.revision,g.launcher_id,g.slug,g.name,l.name,l.adapter,g.external_game_id,g.enabled FROM games g JOIN launchers l ON l.id=g.launcher_id ORDER BY g.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (s *Store) Games(ctx context.Context) ([]Game, error) {
 	var out = make([]Game, 0)
 	for rows.Next() {
 		var v Game
-		if err := rows.Scan(&v.ID, &v.Revision, &v.LauncherID, &v.Slug, &v.Name, &v.LauncherName, &v.ExternalGameID, &v.Enabled); err != nil {
+		if err := rows.Scan(&v.ID, &v.Revision, &v.LauncherID, &v.Slug, &v.Name, &v.LauncherName, &v.LauncherAdapter, &v.ExternalGameID, &v.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -160,7 +160,7 @@ func (s *Store) LauncherVersions(ctx context.Context) ([]LauncherVersion, error)
 	return out, rows.Err()
 }
 func (s *Store) GameVersions(ctx context.Context) ([]GameVersion, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT v.id,v.revision,v.game_id,g.name,v.version,COALESCE(v.source_id,0),COALESCE(s.name,''),v.source_path,COALESCE(v.sha256,''),COALESCE(v.size_bytes,0),v.enabled FROM game_versions v JOIN games g ON g.id=v.game_id LEFT JOIN sources s ON s.id=v.source_id ORDER BY g.name,v.version DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id,v.revision,v.game_id,g.name,l.name,l.adapter,v.version,COALESCE(v.source_id,0),COALESCE(s.name,''),v.source_path,COALESCE(v.sha256,''),COALESCE(v.size_bytes,0),v.enabled FROM game_versions v JOIN games g ON g.id=v.game_id JOIN launchers l ON l.id=g.launcher_id LEFT JOIN sources s ON s.id=v.source_id ORDER BY g.name,v.version DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func (s *Store) GameVersions(ctx context.Context) ([]GameVersion, error) {
 	var out = make([]GameVersion, 0)
 	for rows.Next() {
 		var v GameVersion
-		if err := rows.Scan(&v.ID, &v.Revision, &v.GameID, &v.GameName, &v.Version, &v.SourceID, &v.SourceName, &v.SourcePath, &v.SHA256, &v.SizeBytes, &v.Enabled); err != nil {
+		if err := rows.Scan(&v.ID, &v.Revision, &v.GameID, &v.GameName, &v.LauncherName, &v.LauncherAdapter, &v.Version, &v.SourceID, &v.SourceName, &v.SourcePath, &v.SHA256, &v.SizeBytes, &v.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

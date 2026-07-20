@@ -26,7 +26,7 @@
     },
     "game-versions": {
       kind: "game-version", singular: "Spiel-Version", title: "Spiel-Versionen", subtitle: "Spielpakete versionieren und einer externen Quelle zuordnen.",
-      empty: "Lege eine Spiel-Version an, sobald Spiel und Quelle vorhanden sind.", columns: ["Spiel", "Version", "Quelle und Pfad", "Größe", "Cache", "Status", ""],
+      empty: "Lege eine Spiel-Version an. Launcher-Spiele können direkt über ihre Bezugsplattform verwaltet werden; eigene LANReady-Pakete sind optional.", columns: ["Spiel", "Version", "Bezug / LANReady-Paket", "Größe", "Cache", "Status", ""],
     },
     events: {
       kind: "event", singular: "Event", title: "Events", subtitle: "Event-Entwürfe und ihre benötigten Spielversionen verwalten.",
@@ -234,6 +234,7 @@
   }
 
   function cacheStatus(item) {
+	if (state.tab === "game-versions" && Number(item.SourceID || 0) === 0) return detail("Nicht erforderlich", "Bezug und Aktualisierung über " + (item.LauncherName || "Launcher"));
     const job = latestCacheJob(item);
     if (!job) return detail("Noch nicht im Cache", item.SHA256 ? "Prüfsumme hinterlegt" : "Prüfsumme wird beim Import ermittelt");
     const labels = { queued: "Wartet", running: "Wird geladen", succeeded: "Verifiziert", failed: "Fehlgeschlagen", cancelled: "Abgebrochen" };
@@ -323,8 +324,8 @@
       case "game-versions":
         cell(row, "Spiel", item.GameName);
         cell(row, "Version", detail(item.Version, item.SHA256 ? "SHA-256 hinterlegt" : "Prüfsumme fehlt"));
-        cell(row, "Quelle und Pfad", detail(item.SourceName, item.SourcePath));
-        cell(row, "Größe", formatBytes(item.SizeBytes));
+		cell(row, "Bezug / LANReady-Paket", Number(item.SourceID || 0) === 0 ? detail("Über " + item.LauncherName, "Kein separates LANReady-Paket") : detail(item.SourceName, item.SourcePath));
+        cell(row, "Größe", Number(item.SourceID || 0) === 0 ? "—" : formatBytes(item.SizeBytes));
 		cell(row, "Cache", cacheStatus(item));
         cell(row, "Status", badge(item.Enabled));
         break;
@@ -494,9 +495,28 @@
     const versionLaunchers = state.data.launchers.filter((entry) => entry.Adapter !== "standalone");
     populateSelect(byId("version-launcher"), selectableParents(versionLaunchers, item.LauncherID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.LauncherID);
     populateSelect(byId("version-game"), selectableParents(state.data.games, item.GameID, enabled), (entry) => parentLabel(entry, entry.Name, enabled), item.GameID);
-    populateSelect(byId("entity-source"), selectableParents(state.data.sources, item.SourceID, enabled), (entry) => parentLabel(entry, entry.Name + " · " + entry.Kind, enabled), item.SourceID);
+    const game = state.data.games.find((entry) => Number(entry.ID) === Number(item.GameID || intValue("version-game")));
+    const launcher = game && state.data.launchers.find((entry) => Number(entry.ID) === Number(game.LauncherID));
+    const packageSources = selectableParents(state.data.sources, item.SourceID, enabled);
+    const launcherManaged = state.tab === "game-versions" && launcher && launcher.Adapter !== "standalone";
+    const sourceOptions = launcherManaged ? [{ ID: 0, Name: "Über " + launcher.Name + " beziehen · kein LANReady-Paket", Kind: "launcher", Enabled: true }].concat(packageSources) : packageSources;
+    populateSelect(byId("entity-source"), sourceOptions, (entry) => entry.ID === 0 ? entry.Name : parentLabel(entry, entry.Name + " · " + entry.Kind, enabled), item.SourceID);
+    updateGameVersionDeliveryFields(game, launcher);
     populateSelect(byId("assignment-event"), state.data.events.filter((entry) => entry.Status === "draft"), (entry) => entry.Name, 0);
     populateSelect(byId("assignment-version"), state.data.gameVersions.filter(enabled), (entry) => entry.GameName + " · " + entry.Version, 0);
+  }
+
+  function updateGameVersionDeliveryFields(game, launcher) {
+    const isGameVersion = state.tab === "game-versions";
+    const packageMode = !isGameVersion || intValue("entity-source") > 0;
+    byId("entity-provider").value = game && launcher ? launcher.Name + " · " + (game.ExternalGameID || "keine externe ID") : "Wähle zuerst ein Spiel";
+    byId("entity-source-hint").textContent = isGameVersion && !packageMode ? "Dieses Spiel wird über " + (launcher?.Name || "den Launcher") + " bezogen. Eine externe HTTPS-/WebDAV-Paketquelle ist nicht erforderlich." : "Externe HTTPS-/WebDAV-Quelle, aus der LANReady ein eigenes Paket cachen kann.";
+    document.querySelectorAll(".source-required-mark").forEach((mark) => { mark.hidden = isGameVersion && !packageMode; });
+    ["entity-path", "entity-sha", "entity-size"].forEach((id) => {
+      const control = byId(id);
+      control.disabled = Boolean(isGameVersion && !packageMode) || !canEdit;
+      if (id === "entity-path") control.setAttribute("aria-required", String(packageMode));
+    });
   }
 
   function visibleKinds(kind) {
@@ -599,6 +619,11 @@
       byId("editor-message").textContent = "Die Identität dieses Spiels ohne Launcher ist dauerhaft. Name und Status bleiben bearbeitbar.";
       byId("editor-message").className = "notice";
     }
+    if (state.tab === "game-versions") {
+      const game = state.data.games.find((entry) => Number(entry.ID) === intValue("version-game"));
+      const launcher = game && state.data.launchers.find((entry) => Number(entry.ID) === Number(game.LauncherID));
+      updateGameVersionDeliveryFields(game, launcher);
+    }
     if (byId("save-entity")) byId("save-entity").hidden = immutable;
     if (byId("delete-entity")) byId("delete-entity").hidden = !item || immutable || standaloneGame;
     if (byId("deactivate-entity")) {
@@ -657,10 +682,11 @@
       if (kind === "launcher-version" && !intValue("version-launcher")) { setError("version-launcher", "Bitte wähle einen Launcher."); valid = false; }
       if (kind === "game-version" && !intValue("version-game")) { setError("version-game", "Bitte wähle ein Spiel."); valid = false; }
       if (!byId("entity-version").value.trim()) { setError("entity-version", "Bitte gib eine Version ein."); valid = false; }
-      if (!intValue("entity-source")) { setError("entity-source", "Bitte wähle eine Quelle."); valid = false; }
+      const packageRequired = kind === "launcher-version" || intValue("entity-source") > 0 || state.data.games.find((entry) => Number(entry.ID) === intValue("version-game"))?.LauncherAdapter === "standalone";
+      if (packageRequired && !intValue("entity-source")) { setError("entity-source", "Bitte wähle eine LANReady-Paketquelle."); valid = false; }
       const sourcePath = byId("entity-path").value.trim();
-      if (!sourcePath || sourcePath.startsWith("/") || sourcePath.includes("\\") || sourcePath.split("/").includes("..")) {
-        setError("entity-path", "Nutze einen relativen Pfad ohne .. oder Backslashes."); valid = false;
+      if (packageRequired && (!sourcePath || sourcePath.startsWith("/") || sourcePath.includes("\\") || sourcePath.split("/").includes(".."))) {
+		setError("entity-path", "Nutze einen relativen Paketpfad ohne .. oder Backslashes."); valid = false;
       }
       const sha = byId("entity-sha").value.trim();
       if (sha && !/^[a-fA-F0-9]{64}$/.test(sha)) { setError("entity-sha", "Erwartet werden genau 64 Hex-Zeichen."); valid = false; }
@@ -678,7 +704,7 @@
     if (kind === "launcher") return Object.assign(base, { name: byId("entity-name").value.trim(), slug: byId("entity-slug").value.trim(), adapter: byId("entity-adapter").value });
     if (kind === "game") return Object.assign(base, { name: byId("entity-name").value.trim(), slug: byId("entity-slug").value.trim(), launcherId: intValue("entity-launcher"), externalGameId: byId("entity-external-id").value.trim() });
     if (kind === "launcher-version") return Object.assign(base, { launcherId: intValue("version-launcher"), version: byId("entity-version").value.trim(), sourceId: intValue("entity-source"), sourcePath: byId("entity-path").value.trim(), sha256: byId("entity-sha").value.trim(), sizeBytes: intValue("entity-size") });
-    if (kind === "game-version") return Object.assign(base, { gameId: intValue("version-game"), version: byId("entity-version").value.trim(), sourceId: intValue("entity-source"), sourcePath: byId("entity-path").value.trim(), sha256: byId("entity-sha").value.trim(), sizeBytes: intValue("entity-size") });
+    if (kind === "game-version") { const packageMode = intValue("entity-source") > 0; return Object.assign(base, { gameId: intValue("version-game"), version: byId("entity-version").value.trim(), sourceId: intValue("entity-source"), sourcePath: packageMode ? byId("entity-path").value.trim() : "", sha256: packageMode ? byId("entity-sha").value.trim() : "", sizeBytes: packageMode ? intValue("entity-size") : 0 }); }
     return { id, name: byId("entity-name").value.trim(), slug: byId("entity-slug").value.trim(), startsAt: toAPIDateTime(byId("event-start").value), endsAt: toAPIDateTime(byId("event-end").value), status: byId("event-status").value, enabled: true };
   }
 
@@ -1352,6 +1378,15 @@
   byId("add-entity")?.addEventListener("click", (event) => openEditor(null, event.currentTarget));
   byId("cancel-editor").addEventListener("click", () => closeEditor());
   byId("catalog-form").addEventListener("submit", saveEntity);
+  byId("version-game").addEventListener("change", () => refreshSelects({ GameID: intValue("version-game"), SourceID: 0 }));
+  byId("entity-source").addEventListener("change", () => {
+    const game = state.data?.games.find((entry) => Number(entry.ID) === intValue("version-game"));
+    const launcher = game && state.data.launchers.find((entry) => Number(entry.ID) === Number(game.LauncherID));
+    if (state.tab === "game-versions" && intValue("entity-source") === 0) {
+      byId("entity-path").value = ""; byId("entity-sha").value = ""; byId("entity-size").value = "0";
+    }
+    updateGameVersionDeliveryFields(game, launcher);
+  });
   byId("catalog-form").addEventListener("input", () => { if (canEdit && !byId("catalog-editor").hidden) { state.dirty = true; state.entityKey = ""; } });
   byId("catalog-form").addEventListener("change", () => { if (canEdit && !byId("catalog-editor").hidden) { state.dirty = true; state.entityKey = ""; } });
   byId("deactivate-entity")?.addEventListener("click", deactivateEntity);

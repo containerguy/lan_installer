@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ const DefaultServerURL = "https://game-manager.familie-keller.info"
 
 type App struct {
 	profilePath              string
+	profilePathErr           error
 	version                  string
 	httpClient               *http.Client
 	discover                 func() (discovery.Result, error)
@@ -161,8 +163,9 @@ type UpdateProgress struct {
 }
 
 func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
+	var profilePathErr error
 	if strings.TrimSpace(profilePath) == "" {
-		profilePath = DefaultProfilePath()
+		profilePath, profilePathErr = defaultProfilePath()
 	}
 	if strings.TrimSpace(version) == "" {
 		version = "0.0.0-dev"
@@ -174,7 +177,7 @@ func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
 		}
 	}
 	validator, validatorErr := protocol.NewReleaseValidatorFromJSON(contractschemas.EventReleaseEnvelope, contractschemas.ClientUpdateEnvelope)
-	return &App{profilePath: profilePath, version: version, discover: discovery.Discover, stat: os.Stat, fileVersion: fileversion.Read, validateManualExecutable: deviceclient.ValidateManualExecutableLocation, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
+	return &App{profilePath: profilePath, profilePathErr: profilePathErr, version: version, discover: discovery.Discover, stat: os.Stat, fileVersion: fileversion.Read, validateManualExecutable: deviceclient.ValidateManualExecutableLocation, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
 }
 
 func (a *App) SetHealthRequest(request selfupdate.HealthRequest) { a.healthRequest = &request }
@@ -233,11 +236,132 @@ func (a *App) ConfirmUIReady() {
 }
 
 func DefaultProfilePath() string {
-	root, err := os.UserConfigDir()
-	if err != nil || root == "" {
-		return "lanready-device.json"
+	path, _ := defaultProfilePath()
+	return path
+}
+
+func defaultProfilePath() (string, error) {
+	configRoot, configErr := os.UserConfigDir()
+	homeRoot, homeErr := os.UserHomeDir()
+	legacyDirs := make([]string, 0, 2)
+	if workingDir, workingErr := os.Getwd(); workingErr == nil {
+		legacyDirs = append(legacyDirs, workingDir)
 	}
-	return filepath.Join(root, "LANReady", "device.json")
+	if executable, executableErr := os.Executable(); executableErr == nil {
+		legacyDirs = append(legacyDirs, filepath.Dir(executable))
+	}
+	legacyDirs = append(legacyDirs, commonLegacyProfileDirs(homeRoot, 2, 10000)...)
+	return resolveDefaultProfilePathFromUserDirs(configRoot, configErr, homeRoot, homeErr, legacyDirs)
+}
+
+func commonLegacyProfileDirs(homeRoot string, maxDepth, maxDirectories int) []string {
+	homeRoot = strings.TrimSpace(homeRoot)
+	if homeRoot == "" || !filepath.IsAbs(homeRoot) || maxDepth < 0 || maxDirectories < 1 {
+		return nil
+	}
+	result := make([]string, 0, 32)
+	var visit func(string, int)
+	visit = func(dir string, depth int) {
+		if len(result) >= maxDirectories {
+			return
+		}
+		result = append(result, dir)
+		if depth >= maxDepth {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if len(result) >= maxDirectories {
+				return
+			}
+			if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+				visit(filepath.Join(dir, entry.Name()), depth+1)
+			}
+		}
+	}
+	for _, name := range []string{"Downloads", "Desktop", "Documents"} {
+		visit(filepath.Join(homeRoot, name), 0)
+	}
+	return result
+}
+
+func resolveDefaultProfilePathFromUserDirs(configRoot string, configErr error, homeRoot string, homeErr error, legacyDirs []string) (string, error) {
+	if configErr != nil || strings.TrimSpace(configRoot) == "" || !filepath.IsAbs(configRoot) {
+		homeRoot = strings.TrimSpace(homeRoot)
+		if homeErr != nil || homeRoot == "" || !filepath.IsAbs(homeRoot) {
+			if configErr != nil {
+				return "", fmt.Errorf("Windows-Benutzerprofil konnte weder über AppData noch das Benutzerverzeichnis bestimmt werden: %w", configErr)
+			}
+			return "", errors.New("Windows-Benutzerprofil hat keinen absoluten AppData- oder Benutzerpfad")
+		}
+		configRoot = filepath.Join(homeRoot, "AppData", "Roaming")
+	}
+	return resolveDefaultProfilePath(configRoot, legacyDirs)
+}
+
+func profilePathFromConfigRoot(root string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return "", errors.New("Windows-Benutzerprofil hat keinen absoluten Konfigurationspfad")
+	}
+	return filepath.Join(root, "LANReady", "device.json"), nil
+}
+
+func resolveDefaultProfilePath(configRoot string, legacyDirs []string) (string, error) {
+	stable, err := profilePathFromConfigRoot(configRoot)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Stat(stable); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return "", errors.New("LANReady-Geräteprofil ist keine reguläre Datei")
+		}
+		return stable, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("stabiles LANReady-Geräteprofil prüfen: %w", statErr)
+	}
+	seen := make(map[string]struct{}, len(legacyDirs))
+	var legacyPath string
+	var legacyProfile deviceclient.Profile
+	for _, dir := range legacyDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue
+		}
+		legacy := filepath.Join(dir, "lanready-device.json")
+		if _, duplicate := seen[legacy]; duplicate || legacy == stable {
+			continue
+		}
+		seen[legacy] = struct{}{}
+		info, statErr := os.Lstat(legacy)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return "", fmt.Errorf("altes LANReady-Geräteprofil prüfen: %w", statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", errors.New("altes LANReady-Geräteprofil ist keine reguläre Datei")
+		}
+		profile, loadErr := deviceclient.LoadProfile(legacy)
+		if loadErr != nil {
+			return "", fmt.Errorf("altes LANReady-Geräteprofil laden: %w", loadErr)
+		}
+		if legacyPath != "" && !reflect.DeepEqual(legacyProfile, profile) {
+			return "", errors.New("mehrere unterschiedliche alte LANReady-Geräteprofile gefunden; automatische Migration wurde abgebrochen")
+		}
+		legacyPath, legacyProfile = legacy, profile
+	}
+	if legacyPath != "" {
+		if saveErr := deviceclient.SaveProfile(stable, legacyProfile); saveErr != nil {
+			return "", fmt.Errorf("altes LANReady-Geräteprofil migrieren: %w", saveErr)
+		}
+		_ = os.Remove(legacyPath)
+	}
+	return stable, nil
 }
 
 func (a *App) State() (State, error) {
@@ -305,6 +429,9 @@ func (a *App) State() (State, error) {
 
 func (a *App) state() (State, error) {
 	state := State{ServerURL: DefaultServerURL, ClientVersion: a.version, AgentMode: a.agentMode, EventReadiness: noActiveEventReadiness()}
+	if a.profilePathErr != nil {
+		return state, a.profilePathErr
+	}
 	profile, err := deviceclient.LoadProfile(a.profilePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
@@ -332,6 +459,9 @@ func (a *App) QuitApplication() {
 func (a *App) Enroll(input EnrollmentInput) (State, error) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
+	if a.profilePathErr != nil {
+		return State{}, a.profilePathErr
+	}
 	serverURL, err := normalizeServerURL(input.ServerURL)
 	if err != nil {
 		return State{}, err

@@ -207,3 +207,105 @@ func TestInventoryCatalogImportRequiresAdminAndCreatesDraft(t *testing.T) {
 		t.Fatalf("viewer import: %d %s", deniedResponse.Code, deniedResponse.Body.String())
 	}
 }
+
+func TestInventoryCatalogBulkImportCreatesSelectedDraftsAndRequiresAdmin(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/inventory-bulk-import.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err = st.BootstrapAdmin(ctx, "admin", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	key := make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.CreateDevice(ctx, store.Device{ID: "bulk-device", Name: "Bulk PC", PublicKey: key, WindowsVersion: "11", ClientVersion: "1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := st.CreateDeviceAuthorization(ctx, "bulk-device", "https://manager.example", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.ApproveDeviceAuthorization(ctx, authorization.UserCode, 1); err != nil {
+		t.Fatal(err)
+	}
+	userToken, err := st.PollDeviceAuthorization(ctx, "bulk-device", authorization.AuthorizationID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steamVersion, eaVersion := "steam-1", "ea-1"
+	if err = st.SaveDeviceInventory(ctx, "bulk-device", userToken, store.InventoryScan{ID: "bulk-scan", ClientVersion: "1.0.0", ScannedAt: time.Now(), Installations: []store.InventoryInstallation{
+		{Launcher: "steam", ExternalGameID: "10", DisplayName: "Shared Name", DetectedVersion: &steamVersion, VersionSource: "steam-buildid", InstallPath: `C:\\Games\\Steam`},
+		{Launcher: "ea_app", ExternalGameID: "EA-10", DisplayName: "Shared Name", DetectedVersion: &eaVersion, VersionSource: "ea-manifest", InstallPath: `C:\\Games\\EA`},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	token, session, err := st.CreateSession(ctx, 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, _ := secretbox.New(make([]byte, 32))
+	admin := New(st, false, vault)
+
+	page := httptest.NewRequest(http.MethodGet, "/admin/clients", nil)
+	page.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	pageResponse := httptest.NewRecorder()
+	admin.ServeHTTP(pageResponse, page)
+	if pageResponse.Code != http.StatusOK || !strings.Contains(pageResponse.Body.String(), "Bis zu 100 offene Übernahmen auswählen") || strings.Count(pageResponse.Body.String(), `class="bulk-item-select"`) != 2 {
+		t.Fatalf("bulk controls missing: %d %s", pageResponse.Code, pageResponse.Body.String())
+	}
+
+	form := url.Values{"csrf_token": {session.CSRFToken}, "idempotency_key": {"018f7e45-6a3b-7abc-8def-1234567890ab"}, "device_id": {"bulk-device"}, "scan_id": {"bulk-scan"}, "position": {"0", "1"}}
+	request := httptest.NewRequest(http.MethodPost, "/admin/clients/catalog-import-bulk", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	response := httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "2 ausgewählte Katalogübernahmen wurden vollständig gespeichert") {
+		t.Fatalf("bulk import: %d body=%s", response.Code, response.Body.String())
+	}
+	replay := httptest.NewRequest(http.MethodPost, "/admin/clients/catalog-import-bulk", strings.NewReader(form.Encode()))
+	replay.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	replay.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	replayResponse := httptest.NewRecorder()
+	admin.ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != response.Code || replayResponse.Body.String() != response.Body.String() {
+		t.Fatalf("bulk replay changed response: %d/%d", response.Code, replayResponse.Code)
+	}
+	oversized := httptest.NewRequest(http.MethodPost, "/admin/clients/catalog-import-bulk", strings.NewReader("idempotency_key="+strings.Repeat("x", (1<<20)+1)))
+	oversized.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	oversized.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	oversizedResponse := httptest.NewRecorder()
+	admin.ServeHTTP(oversizedResponse, oversized)
+	if oversizedResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized bulk form: %d", oversizedResponse.Code)
+	}
+	games, err := st.Games(ctx)
+	if err != nil || len(games) != 2 || games[0].Slug == games[1].Slug || games[0].Enabled || games[1].Enabled {
+		t.Fatalf("bulk game drafts: %#v err=%v", games, err)
+	}
+	versions, err := st.GameVersions(ctx)
+	if err != nil || len(versions) != 2 || versions[0].Enabled || versions[1].Enabled {
+		t.Fatalf("bulk version drafts: %#v err=%v", versions, err)
+	}
+
+	if err = st.SetUserRoles(ctx, 1, "viewer"); err != nil {
+		t.Fatal(err)
+	}
+	viewerToken, viewerSession, err := st.CreateSession(ctx, 1, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedForm := url.Values{"csrf_token": {viewerSession.CSRFToken}, "idempotency_key": {"018f7e45-6a3b-7abc-8def-1234567890ac"}, "device_id": {"bulk-device"}, "scan_id": {"bulk-scan"}, "position": {"0"}}
+	denied := httptest.NewRequest(http.MethodPost, "/admin/clients/catalog-import-bulk", strings.NewReader(deniedForm.Encode()))
+	denied.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	denied.AddCookie(&http.Cookie{Name: sessionCookieName, Value: viewerToken})
+	deniedResponse := httptest.NewRecorder()
+	admin.ServeHTTP(deniedResponse, denied)
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("viewer bulk import: %d %s", deniedResponse.Code, deniedResponse.Body.String())
+	}
+}

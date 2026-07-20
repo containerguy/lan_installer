@@ -284,3 +284,99 @@ func TestImportInventoryItemConcurrentDifferentCreatesConflict(t *testing.T) {
 		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
 	}
 }
+
+func TestImportInventoryItemsCreatesAllDraftsInOneTransaction(t *testing.T) {
+	st := seededInventoryImportStore(t)
+	defer st.Close()
+	results, err := st.ImportInventoryItems(context.Background(), []InventoryCatalogImport{
+		{DeviceID: "pc-1", ScanID: "scan-1", Position: 0, Slug: "counter-strike-2", Name: "Counter-Strike 2"},
+		{DeviceID: "pc-1", ScanID: "scan-1", Position: 1, Slug: "ea-game", Name: "EA Game"},
+	}, &AuditEntry{ActorUserID: 1, Action: "bulk_import_inventory"})
+	if err != nil || len(results) != 2 || !results[0].Created || !results[0].VersionCreated || !results[1].Created || results[1].VersionCreated {
+		t.Fatalf("batch results=%#v err=%v", results, err)
+	}
+	games, err := st.Games(context.Background())
+	if err != nil || len(games) != 2 || games[0].Enabled || games[1].Enabled {
+		t.Fatalf("batch games=%#v err=%v", games, err)
+	}
+	versions, err := st.GameVersions(context.Background())
+	if err != nil || len(versions) != 1 || versions[0].Enabled {
+		t.Fatalf("batch versions=%#v err=%v", versions, err)
+	}
+	var mappings, audits int
+	if err = st.db.QueryRow(`SELECT COUNT(*) FROM inventory_catalog_mappings`).Scan(&mappings); err != nil || mappings != 2 {
+		t.Fatalf("mappings=%d err=%v", mappings, err)
+	}
+	if err = st.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='bulk_import_inventory'`).Scan(&audits); err != nil || audits != 2 {
+		t.Fatalf("audits=%d err=%v", audits, err)
+	}
+}
+
+func TestImportInventoryItemsRollsBackEntireBatchOnStaleItem(t *testing.T) {
+	st := seededInventoryImportStore(t)
+	defer st.Close()
+	results, err := st.ImportInventoryItems(context.Background(), []InventoryCatalogImport{
+		{DeviceID: "pc-1", ScanID: "scan-1", Position: 0, Slug: "counter-strike-2", Name: "Counter-Strike 2"},
+		{DeviceID: "pc-1", ScanID: "scan-1", Position: 9, Slug: "missing", Name: "Missing"},
+	}, &AuditEntry{ActorUserID: 1, Action: "bulk_import_inventory"})
+	if results != nil || !errors.Is(err, ErrCatalogNotFound) {
+		t.Fatalf("batch results=%#v err=%v", results, err)
+	}
+	var batchErr *InventoryCatalogBatchError
+	if !errors.As(err, &batchErr) || batchErr.Position != 9 {
+		t.Fatalf("batch error=%#v", batchErr)
+	}
+	for _, table := range []string{"games", "game_versions", "inventory_catalog_mappings", "inventory_catalog_version_mappings", "audit_log"} {
+		var count int
+		if queryErr := st.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); queryErr != nil || count != 0 {
+			t.Fatalf("%s count=%d err=%v", table, count, queryErr)
+		}
+	}
+}
+
+func TestImportInventoryItemsRejectsEmptyAndOversizedBatch(t *testing.T) {
+	st := seededInventoryImportStore(t)
+	defer st.Close()
+	audit := &AuditEntry{ActorUserID: 1, Action: "bulk_import_inventory"}
+	if _, err := st.ImportInventoryItems(context.Background(), nil, audit); err == nil {
+		t.Fatal("empty batch accepted")
+	}
+	values := make([]InventoryCatalogImport, MaxInventoryCatalogBatch+1)
+	if _, err := st.ImportInventoryItems(context.Background(), values, audit); err == nil {
+		t.Fatal("oversized batch accepted")
+	}
+}
+
+func TestImportInventoryItemsLinksStandaloneToExistingCatalogIdentity(t *testing.T) {
+	st := seededInventoryImportStore(t)
+	defer st.Close()
+	ctx := context.Background()
+	launchers, err := st.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var standaloneID int64
+	for _, launcher := range launchers {
+		if launcher.Adapter == "standalone" {
+			standaloneID = launcher.ID
+		}
+	}
+	gameID, err := st.SaveGameAtomic(ctx, Game{Slug: "open-ra", Name: "OpenRA", LauncherID: standaloneID, Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.db.Exec(`INSERT INTO device_inventory_items(scan_id,device_id,position,launcher,external_game_id,display_name,detected_version,version_source,install_path) VALUES('scan-1','pc-1',2,'standalone','open-ra','OpenRA','2026.1','manual-file-version','C:\Games\OpenRA\OpenRA.exe')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportInventoryItems(ctx, []InventoryCatalogImport{{DeviceID: "pc-1", ScanID: "scan-1", Position: 2, Slug: "open-ra-copy", Name: "OpenRA Copy"}}, &AuditEntry{ActorUserID: 1, Action: "bulk_import_inventory"}); err == nil || !strings.Contains(err.Error(), "must be linked") {
+		t.Fatalf("standalone duplicate creation accepted: %v", err)
+	}
+	results, err := st.ImportInventoryItems(ctx, []InventoryCatalogImport{{DeviceID: "pc-1", ScanID: "scan-1", Position: 2, GameID: gameID}}, &AuditEntry{ActorUserID: 1, Action: "bulk_import_inventory"})
+	if err != nil || len(results) != 1 || results[0].GameID != gameID || results[0].Created {
+		t.Fatalf("standalone link results=%#v err=%v", results, err)
+	}
+	var games int
+	if err = st.db.QueryRow(`SELECT COUNT(*) FROM games WHERE external_game_id='open-ra'`).Scan(&games); err != nil || games != 1 {
+		t.Fatalf("standalone identities=%d err=%v", games, err)
+	}
+}

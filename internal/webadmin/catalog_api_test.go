@@ -63,7 +63,7 @@ func TestCatalogPageIncludesRoleAwareCacheManagement(t *testing.T) {
 	response := httptest.NewRecorder()
 	admin.ServeHTTP(response, request)
 	body := response.Body.String()
-	for _, fragment := range []string{`id="cache-management"`, `id="cache-usage-progress"`, `id="cache-gc-age"`, `id="run-cache-gc"`, "Referenzierte Katalog- und Release-Artefakte"} {
+	for _, fragment := range []string{`id="cache-management"`, `id="cache-usage-progress"`, `id="cache-gc-age"`, `id="run-cache-gc"`, `id="entity-provider"`, "LANReady-Paketquelle", "Referenzierte Katalog- und Release-Artefakte"} {
 		if response.Code != http.StatusOK || !strings.Contains(body, fragment) {
 			t.Fatalf("admin cache management misses %q: %d", fragment, response.Code)
 		}
@@ -79,6 +79,55 @@ func TestCatalogPageIncludesRoleAwareCacheManagement(t *testing.T) {
 	body = response.Body.String()
 	if response.Code != http.StatusOK || strings.Contains(body, `id="run-cache-gc"`) || !strings.Contains(body, "Nur Administratoren dürfen unreferenzierte Cacheartefakte entfernen") {
 		t.Fatalf("viewer cache management roles: %d", response.Code)
+	}
+}
+
+func TestCatalogAPIAcceptsLauncherManagedGameVersionWithoutHTTPSource(t *testing.T) {
+	vault, _ := secretbox.New(make([]byte, 32))
+	st, admin, cookie, csrf := sourceAPITestAdmin(t, vault, &fakeSourceTester{})
+	defer st.Close()
+	ctx := context.Background()
+	launchers, err := st.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steamID, standaloneID int64
+	for _, launcher := range launchers {
+		switch launcher.Adapter {
+		case "steam":
+			steamID = launcher.ID
+		case "standalone":
+			standaloneID = launcher.ID
+		}
+	}
+	steamGameID, err := st.SaveGameAtomic(ctx, store.Game{Slug: "aoe2-de", Name: "Age of Empires II: Definitive Edition", LauncherID: steamID, ExternalGameID: "813780", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"id": 0, "gameId": steamGameID, "version": "101.103", "sourceId": 0, "sourcePath": "", "sha256": "", "sizeBytes": 0, "enabled": true}
+	request := catalogJSONRequest(http.MethodPost, "/admin/api/v1/catalog/game-version", body, cookie, csrf)
+	request.Header.Set("Idempotency-Key", "019b1234-1234-7123-8123-123456789add")
+	response := httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("launcher-managed version: %d %s", response.Code, response.Body.String())
+	}
+	versions, err := st.GameVersions(ctx)
+	if err != nil || len(versions) != 1 || versions[0].SourceID != 0 || versions[0].LauncherName != "Steam" {
+		t.Fatalf("launcher-managed catalog snapshot: %#v err=%v", versions, err)
+	}
+
+	standaloneGameID, err := st.SaveGameAtomic(ctx, store.Game{Slug: "manual-game", Name: "Manual Game", LauncherID: standaloneID, ExternalGameID: "manual-game", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body["gameId"], body["version"] = standaloneGameID, "1"
+	request = catalogJSONRequest(http.MethodPost, "/admin/api/v1/catalog/game-version", body, cookie, csrf)
+	request.Header.Set("Idempotency-Key", "019b1234-1234-7123-8123-123456789ade")
+	response = httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("standalone version without package source: %d %s", response.Code, response.Body.String())
 	}
 }
 
