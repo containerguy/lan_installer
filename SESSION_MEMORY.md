@@ -1,6 +1,6 @@
 # LANReady – Session Memory
 
-Stand: 20.07.2026 · Branch `agent/lanready-mvp`
+Stand: 21.07.2026 · Branch `agent/lanready-mvp`
 
 Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session. Danach bei Bedarf [handover.md](handover.md), [docs/README.md](docs/README.md) und [docs/MVP_ACCEPTANCE.md](docs/MVP_ACCEPTANCE.md) lesen.
 
@@ -66,7 +66,7 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 1. Reale Installations-/Updateorchestrierung für Steam, EA App, Ubisoft Connect und Spiele einschließlich Benutzerbestätigung/Ablehnung.
 2. Reale Windows-11-Ende-zu-Ende-Matrix für alle Launcheradapter, manuelle EXE, per-user Task Scheduler, Benachrichtigungen und Self-Update.
 3. Öffentlich vertrauenswürdige Authenticode-Signatur und zeitgestempelter Releasebuild.
-4. **In Umsetzung/Review:** Event-Releases vollständig im Browser erzeugen, mit getrenntem Online-Event-Key isoliert signieren, veröffentlichen und aktivieren. Providerverwaltete Steam-/EA-/Ubisoft-Versionen benötigen keine Fake-Artefakte und erzwingen Client `>=0.2.0`. Jede Aktivierung verlangt zusätzlich ein kompatibles, offline/Authenticode-signiertes Stable-Clientupdate und passende Laufzeitversionen aller aktiven PCs. Standalone- und paketbasierte Releases sind zentral in allen Publish-/Activate-Pfaden bis zum Windows-Installations-Slice gesperrt. Im produktiven Event betrifft dies FlatOut 2 und WC3 TFT. Beide verweisen zusätzlich mit unterschiedlichen Dateinamen auf denselben SHA-256/Blob; nicht automatisch korrigieren.
+4. **Ausgerollt (21.07.2026), noch nie produktiv veröffentlicht:** Event-Releases vollständig im Browser erzeugen, mit getrenntem Online-Event-Key isoliert signieren, veröffentlichen und aktivieren. Providerverwaltete Steam-/EA-/Ubisoft-Versionen benötigen keine Fake-Artefakte und erzwingen Client `>=0.2.0`. Jede Aktivierung verlangt zusätzlich ein kompatibles, offline/Authenticode-signiertes Stable-Clientupdate und passende Laufzeitversionen aller aktiven PCs. Standalone- und paketbasierte Releases sind zentral in allen Publish-/Activate-Pfaden bis zum Windows-Installations-Slice gesperrt. Im produktiven Event betrifft dies FlatOut 2 und WC3 TFT. Beide verweisen zusätzlich mit unterschiedlichen Dateinamen auf denselben SHA-256/Blob; nicht automatisch korrigieren.
 5. Benutzer-/Rollenverwaltung in der UI; Entra-ID-SSO danach als optionaler Slice.
 6. Scheduler und Bereinigung verwaister/alter Ingest-Temporärdateien; Worker-HTTP-Resume beginnt derzeit nach Neustart wieder bei Byte 0.
 
@@ -77,9 +77,13 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 - SHA-256: `8b87ce4ccc8b8dcec3e59f5682853895b2e2654bfacb514b87e66b0c32b2a166`
 - Bewusst nicht Authenticode-signiert. Der aktuelle Event-Dropdown-Fix betrifft nur den Managementserver und benötigt keine neue Windows-EXE.
 
-## Uncommitted Browser-Release-Slice
+## Produktiv ausgerollt – Browserbasierte Event-Releases (21.07.2026)
 
-- Browserformular, Preflight, automatische Signatur, monotone Sequenzen, spätere Aktivierung und idempotenter signierter Rollback sind lokal implementiert.
-- Online-Event-Key und Offline-Update-Key sind auf Server, Client, Backup und Build nach Zweck getrennt; der Offline-Public-Key bleibt als Legacy-Event-Verifikationskey erhalten. Identische Online-/Offline-Keys werden vor Build, Start und Backup abgelehnt.
-- Lokale Dokumentations-, Python-, JavaScript-, Compose- und Diff-Prüfungen sind grün. Vollständige Go-Tests, Container-Candidate, Windows-GUI-Build, Commit/Push und Deployment fehlen noch, weil der Netzwerkzugriff auf die Docker-VM in dieser Session durch das Codex-Ausführungslimit blockiert wurde. Ohne diese Gates nicht deployen.
-- Produktiv läuft weiterhin `c3ef4be`; neue Event-Key-Dateien wurden noch nicht auf den Server übertragen.
+- Produktion läuft auf `81de128`. Browserformular, Preflight, automatische Signatur, monotone Sequenzen, spätere Aktivierung und idempotenter signierter Rollback sind ausgerollt.
+- Der netzwerklose `signer-service`-Container hält als einziger den Online-Event-Private-Key und ist nur über den Unix-Socket `data/signer/signer.sock` (Modus 0600) erreichbar; der Server mountet diesen Pfad read-only und besitzt ausschließlich Public Keys. Produktiv verifiziert: `network_mode=none`, `read_only`, `cap_drop: ALL`, `depends_on: service_healthy`.
+- Produktiver Online-Event-Key: Key-ID `ed25519-5512acafe478acd5`, erzeugt am 21.07.2026. Nachweislich verschieden vom Offline-Update-Key (`scripts/validate_release_keys.py` grün). Identische Online-/Offline-Keys werden weiterhin vor Build, Start und Backup abgelehnt.
+- Klartextkopie des Private Keys liegt unter `/home/ubuntu/lanready/backups/event-key-20260721T122128Z/`. **Offen:** verschlüsselte Kopie an einen vom Server getrennten Ort bringen und danach über das Löschen der Klartextkopie entscheiden. Das normale Secret-Backup sichert diesen Key bewusst nicht.
+- Produktiver Preflight gegen Event `markuslan-20260724` liefert erwartungsgemäß `ready: false` mit genau zwei Blockern (FlatOut 2, WC3 TFT, Code `client_installation_missing`). Es wurde bewusst kein Release erzeugt oder aktiviert.
+- Gates vor dem Deployment: vollständige Go-Tests, Vet, gofmt, Race Detector, Web-/Docs-/Python-Tests, Windows- und Linux-Cross-Builds, isolierter Container-Candidate auf der VM sowie unabhängige Vollständigkeits- und Sicherheitsreviews ohne Befund oberhalb der Konfidenzschwelle.
+- Rollback: `/home/ubuntu/lanready/backups/pre-81de128-20260721T120528Z` und Image `lanready-server:rollback-pre-81de128`. Ein Rollback muss zusätzlich die Topologieänderung zurücknehmen (alte `compose.yaml` einspielen, `signer-service` stoppen/entfernen).
+- Der Windows-GUI-Build fehlt weiterhin (keine Wails-/Windows-Toolchain in der Arbeitsumgebung). Das ist unkritisch, weil jede Aktivierung serverseitig ein kompatibles signiertes Stable-Clientupdate und passende Laufzeitversionen aller aktiven PCs verlangt; ohne neuen Client bleibt das Feature inaktiv.
