@@ -5,6 +5,12 @@ on:
     branches: [main, "agent/**"]
     tags: ["v*.*.*"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      build_gui:
+        description: "Portable Windows-GUI bauen (nur Artefakt, kein Release)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -58,7 +64,7 @@ jobs:
 
   release-windows-gui:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_gui
     runs-on: windows-latest
     permissions:
       contents: write
@@ -94,9 +100,15 @@ jobs:
           RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_RELEASE_PUBLIC_KEY }}
           EVENT_RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_EVENT_RELEASE_PUBLIC_KEY }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           WAILS_VERSION=$(node -p "require('./cmd/lanready-gui/wails.json').info.productVersion")
-          test "$VERSION" = "$WAILS_VERSION" || { echo "Tag $VERSION passt nicht zu wails.json $WAILS_VERSION"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            # A release artifact must never report a version the client does not know.
+            test "$VERSION" = "$WAILS_VERSION" || { echo "Tag $VERSION passt nicht zu wails.json $WAILS_VERSION"; exit 1; }
+          else
+            VERSION="${WAILS_VERSION}-test.${GITHUB_SHA::7}"
+          fi
+          echo "Baue Version $VERSION"
           cd cmd/lanready-gui
           wails build -platform windows/amd64 -s -skipbindings -skipembedcreate -m -trimpath \
             -webview2 download -o LANReady.exe \
@@ -110,6 +122,7 @@ jobs:
       # client shows a SmartScreen warning, and the server refuses to publish
       # it as an auto-update. Manual distribution only.
       - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: cmd/lanready-gui/build/bin/LANReady.exe
           generate_release_notes: true
