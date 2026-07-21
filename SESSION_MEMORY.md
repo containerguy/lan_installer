@@ -1,6 +1,6 @@
 # LANReady – Session Memory
 
-Stand: 21.07.2026 · Branch `agent/lanready-mvp`
+Stand: 22.07.2026 · Branch `agent/lanready-mvp`
 
 Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session. Danach bei Bedarf [handover.md](handover.md), [docs/README.md](docs/README.md) und [docs/MVP_ACCEPTANCE.md](docs/MVP_ACCEPTANCE.md) lesen.
 
@@ -60,6 +60,21 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 - Produktion läuft auf `c3ef4be`: Container healthy, exakte Candidate-Image-ID, SQLite `quick_check=ok`, null Foreign-Key-Verletzungen, Schema v18, read-only Root-Filesystem, `cap_drop: ALL`, NPM-Netz, NFS-Mount und Sentinel geprüft. Öffentlicher Healthcheck, neue Helper-/Katalogassets und authentifizierte Events-Seite sind über HTTPS grün.
 - Vollständiger Rollbackstand vor dem Deployment: `/home/ubuntu/lanready/backups/pre-c3ef4be-20260720T193841Z`. Enthält Daten, Secrets, Konfiguration, altes Image `lanready-server:rollback-pre-c3ef4be`, kompletten 3,9-GB-CAS und `SHA256SUMS`.
 - Die getrackte Produktions-Quellkopie wurde anschließend aus `/tmp/lanready-build-c3ef4be` synchronisiert; `.env`, `data`, `secrets`, `backups`, `release-work`, `dist`, `bin` und `.tmp-uiqa` waren ausgeschlossen. `LANREADY_VERSION=c3ef4be` ist gesetzt.
+
+## Produktiv ausgerollt – Spielinstallation über LANReady (22.07.2026)
+
+- Produktion läuft auf `306195b`. Standalone-Spiele werden als signiertes `extract_archive`-Payload ausgeliefert; der Preflight für `markuslan-20260724` ist erstmals `ready: true` (alle 8 Spiele inkl. FlatOut 2 und WC3 TFT).
+- Sicherheitsgrenzen des Slices, jeweils per Mutationstest als tragend nachgewiesen: zentrale Capability-Sperre (nur `extract_archive` nach `user_games`), zweischichtiges Extraktions-Containment (Namensprüfung + aufgelöster Zielpfad, `O_EXCL`), Digest-Prüfung vor dem Entpacken, fail-closed Action-Parsing im Client.
+- Zielverzeichnis der Installation: `%USERPROFILE%\LANReady Games`. Der Client wählt das Hauptprogramm nie selbst; der Benutzer bestätigt es aus einer Vorschlagsliste.
+- Katalogfehler behoben: WC3 TFT verwies auf die FlatOut-2-Quelle (Nextcloud-Direktlink, `source_path` wirkungslos). Quelle korrigiert, Cache-Job neu gelaufen, Hashes jetzt verschieden und unabhängig verifiziert.
+- **Fehler im Deployment-Verfahren gefunden und behoben:** `rsync --exclude='dist/'` schloss auch `cmd/lanready-gui/frontend/dist/` aus, weshalb Frontend-Änderungen bei früheren Deployments nie auf dem Server ankamen. Ausschlüsse sind jetzt auf das Top-Level verankert (`/dist/`, `/bin/`).
+- Rollback: `/home/ubuntu/lanready/backups/pre-306195b-20260721T215351Z` und Image `lanready-server:rollback-pre-306195b`.
+
+## Windows-Testclient 0.2.0
+
+- Gebaut über GitHub Actions (`workflow_dispatch`, Job `release-windows-gui`), Version `0.2.0-test.306195b`, SHA-256 `9c7edb323b6cf3d25481790b512afdc6938e86a7e9b76ea21390208a44fb6235`.
+- Beide Ed25519-Public-Keys sind eingebettet und verifiziert; die EXE ist bewusst **nicht** Authenticode-signiert (SmartScreen warnt, Self-Update bleibt serverseitig gesperrt). Nur manuelle Verteilung.
+- Die Keys liegen als Repository-Variablen `LANREADY_RELEASE_PUBLIC_KEY` und `LANREADY_EVENT_RELEASE_PUBLIC_KEY`, damit eine Rotation keinen Commit braucht.
 
 ## Noch offene MVP-Schwerpunkte
 
