@@ -115,7 +115,7 @@ jobs:
             -ldflags "-s -w -X main.version=$VERSION -X main.releasePublicKey=$RELEASE_PUBLIC_KEY -X main.eventReleasePublicKey=$EVENT_RELEASE_PUBLIC_KEY"
       - uses: actions/upload-artifact@v4
         with:
-          name: LANReady-portable-${{ github.ref_name }}
+          name: LANReady-portable-${{ github.sha }}
           path: cmd/lanready-gui/build/bin/LANReady.exe
           if-no-files-found: error
       # Deliberately unsigned: without a trusted code signing certificate the
