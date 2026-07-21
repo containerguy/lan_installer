@@ -20,3 +20,4 @@ reports.ndjson
 !/secrets/*.example
 /release-work/*
 !/release-work/.gitkeep
+/backups/

@@ -62,6 +62,30 @@ func TestEventReleaseSchemaGoldenAndActions(t *testing.T) {
 	}
 }
 
+func TestProviderManagedGameNeedsNoLANReadyArtifact(t *testing.T) {
+	payload := []byte(`{"formatVersion":2,"eventId":"lan-2026","releaseId":"release-0123456789abcdef0123456789abcdef","sequence":1,"issuedAt":"2026-07-20T08:00:00Z","validUntil":"2026-08-20T08:00:00Z","minimumClientVersion":"0.2.0","artifacts":[],"launchers":[{"launcherId":"steam","version":"current","required":true,"actions":[{"adapter":"steam","operation":"detect"}]}],"games":[{"gameId":"cs2","name":"Counter-Strike 2","launcherId":"steam","externalGameId":"730","version":"latest","required":true,"payloads":[]}]}`)
+	if err := compileSchema(t, "event-release-envelope.schema.json", "#/$defs/eventRelease").Validate(decodeJSON(t, payload)); err != nil {
+		t.Fatalf("provider-managed payload rejected by schema: %v", err)
+	}
+	if err := ValidateEventReleaseSemantics(payload); err != nil {
+		t.Fatalf("provider-managed payload rejected semantically: %v", err)
+	}
+}
+
+func TestProviderManagedGameRejectsLegacyMinimumClient(t *testing.T) {
+	payload := []byte(`{"minimumClientVersion":"0.1.0","artifacts":[],"launchers":[{"launcherId":"steam","actions":[{"adapter":"steam","operation":"detect"}]}],"games":[{"gameId":"cs2","launcherId":"steam","payloads":[]}]}`)
+	if err := ValidateEventReleaseSemantics(payload); err == nil {
+		t.Fatal("provider-managed release accepted legacy minimum client")
+	}
+}
+
+func TestStandaloneGameWithoutPayloadIsRejected(t *testing.T) {
+	payload := []byte(`{"formatVersion":2,"eventId":"lan-2026","releaseId":"release-0123456789abcdef0123456789abcdef","sequence":1,"issuedAt":"2026-07-20T08:00:00Z","validUntil":"2026-08-20T08:00:00Z","minimumClientVersion":"0.2.0","artifacts":[],"launchers":[],"games":[{"gameId":"flatout-2","name":"FlatOut 2","launcherId":"standalone","externalGameId":"flatout-2","version":"1","required":true,"payloads":[]}]}`)
+	if err := ValidateEventReleaseSemantics(payload); err == nil {
+		t.Fatal("standalone game without installable payload was accepted")
+	}
+}
+
 func TestGoldenPayloadSchemas(t *testing.T) {
 	v := loadVectors(t)
 	eventPayload, err := base64.RawURLEncoding.DecodeString(v.EventRelease.Payload)

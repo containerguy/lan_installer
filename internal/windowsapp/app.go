@@ -51,7 +51,8 @@ type App struct {
 	serverReady             bool
 	updateRequired          bool
 	updateAvailable         bool
-	trustedReleaseKeys      map[string]ed25519.PublicKey
+	trustedUpdateKeys       map[string]ed25519.PublicKey
+	trustedEventKeys        map[string]ed25519.PublicKey
 	expectedPublisherSHA256 string
 	runtimeContext          context.Context
 	healthRequest           *selfupdate.HealthRequest
@@ -162,7 +163,11 @@ type UpdateProgress struct {
 	Error      string `json:"error,omitempty"`
 }
 
-func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
+func New(profilePath, version string) *App {
+	return NewWithPurposeKeys(profilePath, version, nil, nil)
+}
+
+func NewWithPurposeKeys(profilePath, version string, updateKeys, eventKeys []ed25519.PublicKey) *App {
 	var profilePathErr error
 	if strings.TrimSpace(profilePath) == "" {
 		profilePath, profilePathErr = defaultProfilePath()
@@ -170,14 +175,17 @@ func New(profilePath, version string, trustedKeys ...ed25519.PublicKey) *App {
 	if strings.TrimSpace(version) == "" {
 		version = "0.0.0-dev"
 	}
-	keyring := make(map[string]ed25519.PublicKey, len(trustedKeys))
-	for _, key := range trustedKeys {
-		if len(key) == ed25519.PublicKeySize {
-			keyring[protocol.KeyID(key)] = append(ed25519.PublicKey(nil), key...)
+	keyring := func(keys []ed25519.PublicKey) map[string]ed25519.PublicKey {
+		result := make(map[string]ed25519.PublicKey, len(keys))
+		for _, key := range keys {
+			if len(key) == ed25519.PublicKeySize {
+				result[protocol.KeyID(key)] = append(ed25519.PublicKey(nil), key...)
+			}
 		}
+		return result
 	}
 	validator, validatorErr := protocol.NewReleaseValidatorFromJSON(contractschemas.EventReleaseEnvelope, contractschemas.ClientUpdateEnvelope)
-	return &App{profilePath: profilePath, profilePathErr: profilePathErr, version: version, discover: discovery.Discover, stat: os.Stat, fileVersion: fileversion.Read, validateManualExecutable: deviceclient.ValidateManualExecutableLocation, trustedReleaseKeys: keyring, releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
+	return &App{profilePath: profilePath, profilePathErr: profilePathErr, version: version, discover: discovery.Discover, stat: os.Stat, fileVersion: fileversion.Read, validateManualExecutable: deviceclient.ValidateManualExecutableLocation, trustedUpdateKeys: keyring(updateKeys), trustedEventKeys: keyring(eventKeys), releaseValidator: validator, releaseValidatorErr: validatorErr, healthReady: make(chan struct{}), stateTimeout: 15 * time.Second, discoveryTimeout: 30 * time.Second}
 }
 
 func (a *App) SetHealthRequest(request selfupdate.HealthRequest) { a.healthRequest = &request }
@@ -391,8 +399,8 @@ func (a *App) State() (State, error) {
 	state.UpdateRequired = bootstrap.ClientUpdate.Required
 	state.UpdateAvailable = bootstrap.ClientUpdate.Required
 	state.UpdateReleaseURL = bootstrap.ClientUpdate.ReleaseURL
-	if len(a.trustedReleaseKeys) > 0 {
-		available, updateErr := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).CheckUpdate(ctx, a.version, profile.UpdateSequence, a.trustedReleaseKeys)
+	if len(a.trustedUpdateKeys) > 0 {
+		available, updateErr := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).CheckUpdate(ctx, a.version, profile.UpdateSequence, a.trustedUpdateKeys)
 		if updateErr == nil {
 			if available.PublisherCertificateSHA256 == a.expectedPublisherSHA256 && len(a.expectedPublisherSHA256) == 64 {
 				state.UpdateAvailable = true
@@ -517,7 +525,7 @@ func (a *App) InstallUpdate() (returnErr error) {
 		a.opMu.Unlock()
 		return errors.New("der Managementserver bietet derzeit kein neueres Clientupdate an")
 	}
-	if len(a.trustedReleaseKeys) == 0 {
+	if len(a.trustedUpdateKeys) == 0 {
 		a.opMu.Unlock()
 		return errors.New("dieser Build enthält keinen vertrauenswürdigen Release-Public-Key")
 	}
@@ -527,7 +535,7 @@ func (a *App) InstallUpdate() (returnErr error) {
 	}
 	runtimeContext := a.runtimeContext
 	expectedPublisher := a.expectedPublisherSHA256
-	trustedKeys := a.trustedReleaseKeys
+	trustedKeys := a.trustedUpdateKeys
 	a.opMu.Unlock()
 	profile, err := a.connectedProfile()
 	if err != nil {
@@ -931,14 +939,14 @@ func (a *App) loadEventReadiness(ctx context.Context, profile deviceclient.Profi
 	if a.releaseValidatorErr != nil || a.releaseValidator == nil {
 		return eventReadinessError("security_error", "Die eingebetteten Event-Prüfregeln sind ungültig. Event-Bereitschaft bleibt aus Sicherheitsgründen blockiert.")
 	}
-	if len(a.trustedReleaseKeys) == 0 {
+	if len(a.trustedEventKeys) == 0 {
 		return eventReadinessError("security_error", "Dieser Client enthält keinen vertrauenswürdigen Event-Signaturschlüssel.")
 	}
 	raw, err := (&deviceclient.Client{Profile: profile, HTTP: a.httpClient}).EventRelease(ctx, active.EventID, active.ReleaseURL)
 	if err != nil {
 		return eventReadinessError("error", "Das aktive Event konnte nicht sicher geladen werden: "+err.Error())
 	}
-	_, payload, metadata, err := a.releaseValidator.ValidateEventEnvelope(raw, a.trustedReleaseKeys)
+	_, payload, metadata, err := a.releaseValidator.ValidateEventEnvelope(raw, a.trustedEventKeys)
 	if err != nil {
 		return eventReadinessError("security_error", "Das aktive Event hat die Signatur- oder Vertragsprüfung nicht bestanden.")
 	}

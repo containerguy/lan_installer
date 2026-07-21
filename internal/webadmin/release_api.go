@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	lanrelease "github.com/containerguy/lan_installer/internal/release"
 	"github.com/containerguy/lan_installer/internal/store"
 )
 
@@ -17,12 +18,20 @@ type publishEventReleaseRequest struct {
 	Activate bool            `json:"activate"`
 }
 
+type generateEventReleaseRequest struct {
+	EventID              int64  `json:"eventId"`
+	MinimumClientVersion string `json:"minimumClientVersion"`
+	ValidUntil           string `json:"validUntil"`
+	Activate             bool   `json:"activate"`
+}
+
 type publishClientUpdateRequest struct {
 	Envelope json.RawMessage `json:"envelope"`
 }
 
 type rollbackCandidateRequest struct {
 	ValidUntil string `json:"validUntil"`
+	Activate   bool   `json:"activate"`
 }
 
 func (a *Admin) releaseStatusAPI(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +66,28 @@ func (a *Admin) releaseStatusAPI(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, map[string]any{"activeEvent": activeEvent, "eventReleases": eventReleases, "clientUpdate": clientUpdate})
 }
 
+func (a *Admin) eventReleasePreflightAPI(w http.ResponseWriter, r *http.Request) {
+	if a.releases == nil {
+		a.apiError(w, http.StatusServiceUnavailable, "release_service_unavailable", "Release-Publishing ist noch nicht konfiguriert.")
+		return
+	}
+	eventID, err := strconv.ParseInt(r.PathValue("eventID"), 10, 64)
+	if err != nil || eventID < 1 {
+		a.apiError(w, http.StatusUnprocessableEntity, "release_event_invalid", "Das Event ist ungültig.")
+		return
+	}
+	result, err := a.releases.PreflightEvent(r.Context(), eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		a.apiError(w, http.StatusNotFound, "release_event_unknown", "Das Event existiert nicht im Katalog.")
+		return
+	}
+	if err != nil {
+		a.apiError(w, http.StatusInternalServerError, "release_preflight_failed", "Die Event-Prüfung konnte nicht abgeschlossen werden.")
+		return
+	}
+	a.writeJSON(w, http.StatusOK, result)
+}
+
 func releaseDeliveryState(now time.Time, release store.StoredRelease) string {
 	if now.Before(release.IssuedAt) {
 		return "scheduled"
@@ -86,6 +117,28 @@ func (a *Admin) publishEventReleaseAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeJSON(w, http.StatusCreated, map[string]any{"eventId": metadata.EventID, "releaseId": metadata.ReleaseID, "sequence": metadata.Sequence, "active": request.Activate})
+}
+
+func (a *Admin) generateEventReleaseAPI(w http.ResponseWriter, r *http.Request) {
+	session, ok := a.releaseMutationSession(w, r)
+	if !ok {
+		return
+	}
+	var request generateEventReleaseRequest
+	if !a.decodeCatalogJSON(w, r, &request) {
+		return
+	}
+	validUntil, err := time.Parse(time.RFC3339, request.ValidUntil)
+	if request.EventID < 1 || err != nil || request.MinimumClientVersion == "" {
+		a.apiError(w, http.StatusUnprocessableEntity, "release_fields_invalid", "Event, Gültigkeitsende und Mindestclient-Version sind erforderlich.")
+		return
+	}
+	result, err := a.releases.GenerateAndPublishEvent(r.Context(), request.EventID, request.MinimumClientVersion, validUntil, request.Activate, &store.AuditEntry{ActorUserID: session.User.ID, Action: "generate_publish_event_release", RemoteAddr: r.RemoteAddr})
+	if err != nil {
+		a.releaseMutationError(w, err)
+		return
+	}
+	a.writeJSON(w, http.StatusCreated, map[string]any{"eventId": result.EventID, "releaseId": result.ReleaseID, "sequence": result.Sequence, "gameCount": result.GameCount, "launcherCount": result.LauncherCount, "active": request.Activate})
 }
 
 func (a *Admin) publishClientUpdateReleaseAPI(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +186,7 @@ func (a *Admin) activateEventReleaseAPI(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *Admin) buildRollbackCandidateAPI(w http.ResponseWriter, r *http.Request) {
-	_, ok := a.releaseMutationSession(w, r)
+	session, ok := a.releaseMutationSession(w, r)
 	if !ok {
 		return
 	}
@@ -151,17 +204,12 @@ func (a *Admin) buildRollbackCandidateAPI(w http.ResponseWriter, r *http.Request
 		a.apiError(w, http.StatusUnprocessableEntity, "rollback_validity_invalid", "Für den Rollback-Kandidaten ist ein gültiges zukünftiges Ende erforderlich.")
 		return
 	}
-	payload, metadata, err := a.releases.BuildRollbackCandidate(r.Context(), r.PathValue("eventID"), sequence, validUntil)
+	metadata, err := a.releases.GenerateAndPublishRollback(r.Context(), r.PathValue("eventID"), sequence, validUntil, request.Activate, &store.AuditEntry{ActorUserID: session.User.ID, Action: "generate_publish_event_rollback", RemoteAddr: r.RemoteAddr})
 	if err != nil {
 		a.releaseMutationError(w, err)
 		return
 	}
-	var value any
-	if err = json.Unmarshal(payload, &value); err != nil {
-		a.apiError(w, http.StatusInternalServerError, "rollback_candidate_failed", "Rollback-Kandidat konnte nicht erstellt werden.")
-		return
-	}
-	a.writeJSON(w, http.StatusOK, map[string]any{"eventId": metadata.EventID, "sourceSequence": sequence, "sequence": metadata.Sequence, "releaseId": metadata.ReleaseID, "payload": value})
+	a.writeJSON(w, http.StatusCreated, map[string]any{"eventId": metadata.EventID, "sourceSequence": sequence, "sequence": metadata.Sequence, "releaseId": metadata.ReleaseID, "active": request.Activate})
 }
 
 func (a *Admin) releaseMutationSession(w http.ResponseWriter, r *http.Request) (store.Session, bool) {
@@ -182,7 +230,16 @@ func (a *Admin) releaseMutationSession(w http.ResponseWriter, r *http.Request) (
 }
 
 func (a *Admin) releaseMutationError(w http.ResponseWriter, err error) {
+	var preflight *lanrelease.EventPreflightError
+	var compatibility *lanrelease.ClientCompatibilityError
+	var updateCompatibility *lanrelease.CompatibleClientUpdateError
 	switch {
+	case errors.As(err, &preflight):
+		a.apiErrorWithFields(w, http.StatusUnprocessableEntity, "release_preflight_failed", "Das Event ist noch nicht veröffentlichbar. Prüfe die angezeigten Spielversionen.", map[string]any{"issues": preflight.Preflight.Issues})
+	case errors.As(err, &compatibility):
+		a.apiErrorWithFields(w, http.StatusConflict, "release_clients_incompatible", "Aktivierung blockiert: Aktualisiere zuerst alle aktiven LANReady-Clients auf mindestens "+compatibility.MinimumVersion+".", map[string]any{"devices": compatibility.Devices, "minimumClientVersion": compatibility.MinimumVersion})
+	case errors.As(err, &updateCompatibility):
+		a.apiErrorWithFields(w, http.StatusConflict, "release_client_update_missing", "Aktivierung blockiert: Im Stable-Kanal fehlt ein vollständig signiertes Clientupdate auf mindestens "+updateCompatibility.MinimumVersion+".", map[string]any{"minimumClientVersion": updateCompatibility.MinimumVersion})
 	case errors.Is(err, store.ErrReleaseSequence):
 		a.apiError(w, http.StatusConflict, "release_sequence_conflict", "Die Release-Sequenz ist nicht der nächste monotone Wert.")
 	case errors.Is(err, store.ErrReleaseEventUnknown):
@@ -197,6 +254,16 @@ func (a *Admin) releaseMutationError(w http.ResponseWriter, err error) {
 		a.apiError(w, http.StatusConflict, "release_version_conflict", "Die Clientupdate-Version ist kein monotones Upgrade oder besitzt eine ungültige Mindestversion.")
 	case errors.Is(err, store.ErrReleaseNotLatest):
 		a.apiError(w, http.StatusConflict, "release_activation_not_latest", "Nur die neueste Event-Sequenz kann aktiviert werden. Ein Rollback muss als neue höhere signierte Sequenz veröffentlicht werden.")
+	case errors.Is(err, lanrelease.ErrEventHasNoGames):
+		a.apiError(w, http.StatusUnprocessableEntity, "release_event_empty", "Dem Event ist noch keine Spielversion zugeordnet.")
+	case errors.Is(err, lanrelease.ErrEventCatalogInvalid):
+		a.apiError(w, http.StatusUnprocessableEntity, "release_catalog_invalid", "Mindestens ein zugeordneter Eintrag ist deaktiviert, unvollständig oder besitzt keine externe Spiel-ID.")
+	case errors.Is(err, lanrelease.ErrEventPackageUnsupported):
+		a.apiError(w, http.StatusUnprocessableEntity, "release_package_unsupported", "Paketbasierte und launcherlose Spiele werden erst nach dem Windows-Installations-Slice veröffentlichbar.")
+	case errors.Is(err, lanrelease.ErrEventActionsUnsupported):
+		a.apiError(w, http.StatusUnprocessableEntity, "release_actions_unsupported", "Dieses Release enthält Paketaktionen, die der aktuelle Windows-Client noch nicht sicher ausführen kann.")
+	case errors.Is(err, lanrelease.ErrEventSignerUnavailable):
+		a.apiError(w, http.StatusServiceUnavailable, "release_signer_unavailable", "Der geschützte Signer ist derzeit nicht verfügbar.")
 	default:
 		a.apiError(w, http.StatusUnprocessableEntity, "release_invalid", "Das Release ist ungültig, nicht vertrauenswürdig oder bereits veröffentlicht.")
 	}

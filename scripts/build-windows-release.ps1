@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$ReleasePublicKey,
+    [Parameter(Mandatory = $true)][string]$EventReleasePublicKey,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{64}$')][string]$PublisherCertificateSHA256,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{40}$')][string]$CertificateThumbprint,
     [Parameter(Mandatory = $true)][ValidatePattern('^https?://')][string]$TimestampUrl,
@@ -11,6 +12,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Convert-LANReadyPublicKey {
+    param([string]$Value, [string]$Label)
+    try {
+        $bytes = [Convert]::FromBase64String($Value)
+    } catch {
+        throw "$Label ist kein gültiger Base64-Public-Key."
+    }
+    if ($bytes.Length -ne 32) {
+        throw "$Label muss exakt 32 Byte enthalten."
+    }
+    return $bytes
+}
+
+$updatePublicKeyBytes = Convert-LANReadyPublicKey -Value $ReleasePublicKey -Label 'Clientupdate-Public-Key'
+$eventPublicKeyBytes = Convert-LANReadyPublicKey -Value $EventReleasePublicKey -Label 'Event-Release-Public-Key'
+if ([Convert]::ToBase64String($updatePublicKeyBytes) -eq [Convert]::ToBase64String($eventPublicKeyBytes)) {
+    throw 'Clientupdate- und Event-Release-Public-Key müssen verschieden sein.'
+}
+
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
     throw 'Dieser Releasepfad muss auf einer vertrauenswürdigen Windows-Buildstation laufen.'
 }
@@ -42,7 +63,7 @@ if ($config.info.productVersion -ne $Version) {
     throw "Version $Version stimmt nicht mit wails.json productVersion $($config.info.productVersion) überein."
 }
 
-$ldflags = "-s -w -X main.version=$Version -X main.releasePublicKey=$ReleasePublicKey -X main.authenticodePublisherSHA256=$PublisherCertificateSHA256"
+$ldflags = "-s -w -X main.version=$Version -X main.releasePublicKey=$ReleasePublicKey -X main.eventReleasePublicKey=$EventReleasePublicKey -X main.authenticodePublisherSHA256=$PublisherCertificateSHA256"
 Push-Location $gui
 try {
     & $Wails build -platform windows/amd64 -s -skipbindings -skipembedcreate -m -trimpath -webview2 download -ldflags $ldflags -o LANReady.exe

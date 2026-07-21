@@ -372,7 +372,9 @@ func (a *Admin) catalogMutationError(w http.ResponseWriter, err error) {
 	case errors.As(err, &referenced):
 		a.apiErrorWithFields(w, http.StatusConflict, "catalog_referenced", "Der Eintrag wird noch verwendet. Entferne zuerst die abhängigen Einträge.", map[string]any{"references": referenced.References})
 	case errors.Is(err, store.ErrPublishedEventLocked):
-		a.apiError(w, http.StatusConflict, "event_immutable", "Veröffentlichte Events sind unveränderlich. Rollback und neue Releases folgen im Publish-Slice.")
+		a.apiError(w, http.StatusConflict, "event_immutable", "Archivierte Events sind unveränderlich.")
+	case errors.Is(err, store.ErrEventGameConflict):
+		a.apiError(w, http.StatusConflict, "event_game_conflict", "Dieses Event enthält bereits eine andere Version desselben Spiels. Entferne zuerst die bisherige Version.")
 	case errors.Is(err, store.ErrCatalogNotFound), errors.Is(err, sql.ErrNoRows):
 		a.apiError(w, http.StatusNotFound, "catalog_not_found", "Eintrag wurde nicht gefunden.")
 	case strings.Contains(strings.ToLower(err.Error()), "unique constraint"):

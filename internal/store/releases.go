@@ -147,8 +147,11 @@ func (s *Store) backfillEventReleaseArtifacts() error {
 				MediaType string `json:"mediaType"`
 			} `json:"artifacts"`
 		}
-		if err = json.Unmarshal(release.payload, &payload); err != nil || len(payload.Artifacts) == 0 {
+		if err = json.Unmarshal(release.payload, &payload); err != nil {
 			return fmt.Errorf("event release %s/%d artifact backfill failed", release.eventID, release.sequence)
+		}
+		if len(payload.Artifacts) == 0 {
+			continue
 		}
 		tx, beginErr := s.db.Begin()
 		if beginErr != nil {
@@ -239,6 +242,12 @@ func (s *Store) EventRelease(ctx context.Context, eventID string) (StoredRelease
 		release.ValidUntil = time.Unix(validUntil, 0).UTC()
 	}
 	return release, err
+}
+
+func (s *Store) NextEventReleaseSequence(ctx context.Context, eventID string) (int64, error) {
+	var sequence int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM event_releases WHERE event_id=?`, eventID).Scan(&sequence)
+	return sequence, err
 }
 
 func (s *Store) EventReleaseSequence(ctx context.Context, eventID string, sequence int64) (StoredRelease, error) {

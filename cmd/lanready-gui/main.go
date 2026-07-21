@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/containerguy/lan_installer/internal/protocol"
 	"github.com/containerguy/lan_installer/internal/selfupdate"
 	"github.com/containerguy/lan_installer/internal/windowsapp"
 	"github.com/wailsapp/wails/v2"
@@ -21,6 +22,7 @@ import (
 
 var version = "0.0.0-dev"
 var releasePublicKey = ""
+var eventReleasePublicKey = ""
 var authenticodePublisherSHA256 = ""
 
 //go:embed all:frontend/dist
@@ -55,11 +57,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	keyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(releasePublicKey))
-	if err != nil || len(keyBytes) != 32 {
-		log.Fatal("Release-Public-Key fehlt oder ist ungültig")
+	decodeKey := func(name, encoded string) ed25519.PublicKey {
+		keyBytes, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+		if decodeErr != nil || len(keyBytes) != ed25519.PublicKeySize {
+			log.Fatalf("%s fehlt oder ist ungültig", name)
+		}
+		return ed25519.PublicKey(keyBytes)
 	}
-	backend := windowsapp.New("", version, ed25519.PublicKey(keyBytes))
+	updateKey := decodeKey("Clientupdate-Public-Key", releasePublicKey)
+	eventKey := decodeKey("Event-Release-Public-Key", eventReleasePublicKey)
+	if protocol.KeyID(updateKey) == protocol.KeyID(eventKey) {
+		log.Fatal("Clientupdate- und Event-Release-Key müssen getrennt sein")
+	}
+	backend := windowsapp.NewWithPurposeKeys("", version, []ed25519.PublicKey{updateKey}, []ed25519.PublicKey{updateKey, eventKey})
 	backend.SetExpectedPublisherSHA256(authenticodePublisherSHA256)
 	backend.SetAgentMode(agentMode)
 	if healthMode {

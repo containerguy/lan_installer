@@ -44,13 +44,16 @@ func TestEventsPageIncludesAdminReleaseWorkflow(t *testing.T) {
 		t.Fatalf("events page: %d %s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, required := range []string{"Signiertes Event-Release veröffentlichen", `id="release-file"`, `id="release-preview"`, `id="release-activate"`, "Signiertes Clientupdate veröffentlichen", `id="client-update-file"`, `id="client-update-artifact-file"`, `id="upload-client-update-artifact"`, `id="client-update-artifact-status"`, `id="client-update-preview"`, `name="can-publish" content="true"`} {
+	for _, required := range []string{"Event veröffentlichen", `id="release-event"`, `id="release-valid-until-input"`, `id="release-minimum-client-input"`, `id="release-preview"`, `id="release-activate"`, "Release erstellen, signieren und veröffentlichen", "Signiertes Clientupdate veröffentlichen", `id="client-update-file"`, `id="client-update-artifact-file"`, `id="upload-client-update-artifact"`, `id="client-update-artifact-status"`, `id="client-update-preview"`, `name="can-publish" content="true"`} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("events page misses %q", required)
 		}
 	}
 	if strings.Contains(body, "Private-Key-Datei auswählen") {
 		t.Fatal("events page asks for a private key")
+	}
+	if strings.Contains(body, `id="release-file"`) {
+		t.Fatal("primary event publishing flow still asks for a JSON envelope")
 	}
 }
 

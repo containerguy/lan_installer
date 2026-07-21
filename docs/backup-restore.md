@@ -9,20 +9,20 @@ Dieses Dokument ist betriebsrelevant. Ein Archiv gilt erst nach Integritätsprü
 | Bestandteil | Standardpfad | Bedeutung |
 |---|---|---|
 | SQLite und Serverdaten | `./data/` | Benutzer, Rollen, Geräte, Inventar, Quellenmetadaten, Katalog, Jobs, Releases und Audit |
-| Drei Laufzeit-Secrets | über Compose aufgelöste `file`-Pfade | WebDAV-Masterschlüssel, Admin-Bootstrap-Secret und Release-Public-Key |
+| Vier gesicherte Laufzeit-Secrets | über Compose aufgelöste `file`-Pfade | WebDAV-Masterschlüssel, Admin-Bootstrap-Secret, Offline-Clientupdate-Public-Key und Online-Event-Public-Key |
 | Laufzeitkonfiguration | `.env`, `compose.yaml`, `compose.npm.yaml` | Tokens, URLs, UID/GID, Proxy- und Cachekonfiguration |
 | CAS-Cache | `LANREADY_CACHE_HOST_PATH` | verifizierte Pakete und Clientupdate-Artefakte |
-| Signiermaterial | externe Signierstation oder `release-work/` | privater Ed25519-Key; getrennt, verschlüsselt und offline |
+| Online-Event-Signiermaterial | konfigurierter Private-Key-Pfad plus externes Offlinebackup | nicht im normalen Backup; nur im netzwerklosen Signer gemountet |
 | Laufendes Serverimage | komprimiertes `docker image save` | binär identischer Rollback unabhängig von später geänderten Base-Images |
 | Versionsbezug | Backup-ID, Git-Commit, Image-Tag, Schema, Cache-Snapshot-ID | ordnet alle Bestandteile demselben Stand zu |
 
-Datenbank und WebDAV-Masterschlüssel bilden eine Einheit. Fehlt der Schlüssel, sind gespeicherte WebDAV-Zugangsdaten nicht mehr entschlüsselbar. Das private Release-Signiermaterial wird nie zusammen mit dem öffentlich erreichbaren Server gesichert.
+Datenbank und WebDAV-Masterschlüssel bilden eine Einheit. Fehlt der Schlüssel, sind gespeicherte WebDAV-Zugangsdaten nicht mehr entschlüsselbar. Das private Event-Signiermaterial wird bewusst **nicht** durch das normale Secret-Backup kopiert: Es muss separat verschlüsselt und getrennt offline gesichert werden. Beim Backup und Restore prüft das Werkzeug jedoch, dass der Event-Public-Key zum aktuell konfigurierten Private Key passt; bei einer Abweichung wird vor jeder Änderung abgebrochen.
 
 Windows-Profile unter `%APPDATA%\LANReady\device.json` sind per DPAPI an Benutzer und Windows-Kontext gebunden. Sie sind kein portables Serverbackup. Bleibt das Profil erhalten, meldet sich ein Client nach Server-Restore mit derselben Geräte-ID.
 
 ## 2. Secret-Pfade zuverlässig behandeln
 
-Secret-Pfade können in `.env` außerhalb von `./secrets` liegen. [scripts/lanready_secrets.py](../scripts/lanready_secrets.py) liest deshalb die tatsächlich durch beide Compose-Dateien aufgelösten Pfade. Es lehnt fehlende Dateien und Symlinks ab, sichert alle drei Dateien mit Modus 0600 samt Pfadmanifest und stellt sie atomar nur an exakt dieselben konfigurierten Pfade zurück.
+Secret-Pfade können in `.env` außerhalb von `./secrets` liegen. [scripts/lanready_secrets.py](../scripts/lanready_secrets.py) liest deshalb die tatsächlich durch beide Compose-Dateien aufgelösten Pfade. Es lehnt fehlende Dateien und Symlinks ab, prüft das Online-Event-Schlüsselpaar sowie dessen Verschiedenheit vom Offline-Clientupdate-Key, sichert die vier nicht privaten Dateien mit Modus 0600 samt Pfadmanifest und stellt sie atomar nur an exakt dieselben konfigurierten Pfade zurück. Der private Event-Key bleibt an seinem konfigurierten Ort und muss vor dem Restore separat wiederhergestellt worden sein.
 
 Die Befehle werden immer im Repository ausgeführt:
 
@@ -31,7 +31,7 @@ python3 scripts/lanready_secrets.py backup /sicheres-backup/STAND/resolved-secre
 python3 scripts/lanready_secrets.py restore /sicheres-backup/STAND/resolved-secrets
 ```
 
-Der zweite Befehl gehört ausschließlich in den unten beschriebenen Restore. Seine Tests decken drei vollständig außerhalb von `./secrets` konfigurierte Quelldateien ab.
+Der zweite Befehl gehört ausschließlich in den unten beschriebenen Restore. Seine Tests decken vier vollständig außerhalb von `./secrets` konfigurierte Quelldateien, fehlende Backupdateien und nicht passende Event-Schlüssel ab.
 
 ## 3. Empfohlene Strategie und Onlinebackup
 

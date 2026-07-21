@@ -172,7 +172,7 @@ const catalogPageHTML = `<!doctype html>
   </section>
 
   <section class="card assignment" id="event-assignment" hidden aria-labelledby="assignment-title">
-    <div class="section-heading"><div><h2 id="assignment-title">Spielversionen im Event</h2><p>Nur aktive Versionen können einem Entwurf zugeordnet werden.</p></div></div>
+    <div class="section-heading"><div><h2 id="assignment-title">Spielversionen im Event</h2><p>Nur aktive Versionen können zugeordnet werden. Änderungen an einem veröffentlichten Event gelten erst mit einer neuen signierten Sequenz; frühere Releases bleiben unverändert.</p></div></div>
     {{if .CanEdit}}<form id="assignment-form" class="inline-form">
       <label class="field"><span>Event</span><select class="select" id="assignment-event"></select></label>
       <label class="field"><span>Spielversion</span><select class="select" id="assignment-version"></select></label>
@@ -183,23 +183,23 @@ const catalogPageHTML = `<!doctype html>
   </section>
 
   <section class="card assignment" id="event-release" hidden aria-labelledby="release-title" aria-busy="false">
-    <div class="section-heading"><div><p class="eyebrow">Vertrauensgrenze</p><h2 id="release-title">Signiertes Event-Release veröffentlichen</h2><p>Der private Signaturschlüssel wird ausschließlich im netzwerklosen Signer verwendet. Der Managementserver erhält nur das fertige Envelope und prüft Signatur, Schema, Sequenz und jedes Artefakt erneut.</p></div></div>
+    <div class="section-heading"><div><p class="eyebrow">An Clients ausliefern</p><h2 id="release-title">Event veröffentlichen</h2><p>Wähle ein Event und veröffentliche dessen zugeordnete Spiele. LANReady erstellt und signiert das Release automatisch; der geschützte private Schlüssel bleibt im netzwerklosen Signer.</p></div></div>
     <p class="notice" id="release-current" role="status">Aktiver Clientstand wird geladen …</p>
     <div class="release-history" id="release-history" aria-live="polite"></div>
     {{if .CanPublish}}<form id="release-form" class="release-form" novalidate>
-      <label class="field wide"><span>Signiertes Envelope <span class="required-mark" aria-hidden="true">*</span></span><input class="input" id="release-file" type="file" accept="application/json,.json" required aria-describedby="release-file-hint release-error"><small class="field-hint" id="release-file-hint">Wähle ausschließlich eine mit <code>lanready-release sign-event</code> erzeugte JSON-Datei. Niemals einen Private Key hochladen.</small></label>
-      <div class="release-preview" id="release-preview" hidden aria-live="polite">
-        <strong id="release-preview-title">Release-Vorschau</strong>
-        <dl><div><dt>Event</dt><dd id="release-event-id">—</dd></div><div><dt>Release-ID</dt><dd id="release-id" class="mono">—</dd></div><div><dt>Sequenz</dt><dd id="release-sequence">—</dd></div><div><dt>Ausgestellt</dt><dd id="release-issued">—</dd></div><div><dt>Gültig bis</dt><dd id="release-valid-until">—</dd></div><div><dt>Mindestclient</dt><dd id="release-minimum-client">—</dd></div><div><dt>Launcher</dt><dd id="release-launchers">—</dd></div><div><dt>Spiele</dt><dd id="release-games">—</dd></div><div><dt>Artefakte</dt><dd id="release-artifacts">—</dd></div><div><dt>Key-ID</dt><dd id="release-key-id" class="mono">—</dd></div></dl>
-        <p class="subtle">Diese Vorschau ist noch keine Vertrauensentscheidung. Die verbindliche Prüfung erfolgt serverseitig vor der atomaren Veröffentlichung.</p>
+      <div class="grid">
+        <label class="field"><span>Event <span class="required-mark" aria-hidden="true">*</span></span><select class="select" id="release-event" required></select></label>
+        <label class="field"><span>Gültig bis <span class="required-mark" aria-hidden="true">*</span></span><input class="input" id="release-valid-until-input" type="datetime-local" required></label>
+        <label class="field"><span>Älteste unterstützte LANReady-Version</span><input class="input" id="release-minimum-client-input" value="0.2.0" pattern="[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?" required><small class="field-hint">Providerverwaltete Releases benötigen den aktuellen Client ab 0.2.0.</small></label>
       </div>
-      <label class="check"><input id="release-activate" type="checkbox" aria-describedby="release-activation-impact"> Nach erfolgreicher Veröffentlichung als aktives Event an Clients ausliefern</label>
+      <div class="release-preview" id="release-preview" aria-live="polite"><strong>Veröffentlichungsprüfung</strong><p id="release-summary">Wähle ein Event, um die zugeordneten Spiele zu prüfen.</p><ul id="release-issues" class="issue-list"></ul></div>
+      <label class="check"><input id="release-activate" type="checkbox" aria-describedby="release-activation-impact"> Sofort als aktives Event an alle verbundenen Clients ausliefern</label>
       <p class="notice" id="release-activation-impact">Ohne Aktivierung wird die Sequenz gespeichert, aber nicht an Clients ausgeliefert.</p>
-      <label class="field wide"><span>Rollback-Kandidat gültig bis</span><input class="input" id="rollback-valid-until" type="datetime-local"><small class="field-hint">Wird nur für „Rollback vorbereiten“ verwendet. Du entscheidest das neue Gültigkeitsende ausdrücklich; danach muss der Kandidat offline signiert und wieder hochgeladen werden.</small></label>
-      <p class="field-hint">Rollback-Schutz: Frühere Inhalte dürfen nie direkt reaktiviert werden. LANReady erstellt daraus eine neue höhere Sequenz; erst deine neue Offline-Signatur macht sie veröffentlichbar.</p>
+      <label class="field wide"><span>Rollback gültig bis</span><input class="input" id="rollback-valid-until" type="datetime-local"><small class="field-hint">Wird nur für „Früheren Stand veröffentlichen“ verwendet. LANReady veröffentlicht den früheren Inhalt automatisch als neue, signierte höhere Sequenz.</small></label>
+      <p class="field-hint">Rollback-Schutz: Frühere Sequenzen werden nie direkt reaktiviert. Der gewählte Inhalt wird serverseitig neu signiert, veröffentlicht und nach deiner Bestätigung aktiviert.</p>
       <p class="notice" id="release-error" role="alert" aria-live="assertive"></p>
       <p class="notice" id="release-progress" role="status" aria-live="polite"></p>
-      <div class="actions"><button class="button primary" id="publish-release" type="submit" disabled>Prüfen und veröffentlichen</button></div>
+      <div class="actions"><button class="button primary" id="publish-release" type="submit">Release erstellen, signieren und veröffentlichen</button></div>
     </form>{{else}}<p class="notice">Nur Benutzer mit der Rolle Admin dürfen signierte Releases veröffentlichen.</p>{{end}}
   </section>
   <section class="card assignment" id="client-update-release" hidden aria-labelledby="client-update-title" aria-busy="false">
@@ -218,6 +218,6 @@ const catalogPageHTML = `<!doctype html>
 </div>
 <script src="/admin/assets/catalog-cache-helpers.js?v=20260718-1" defer></script>
 <script src="/admin/assets/catalog-assignment-helpers.js?v=20260720-1" defer></script>
-<script src="/admin/assets/catalog.js?v=20260720-2" defer></script>
+<script src="/admin/assets/catalog.js?v=20260720-3" defer></script>
 </body>
 </html>`

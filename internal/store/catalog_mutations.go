@@ -16,6 +16,7 @@ import (
 var (
 	ErrCatalogNotFound      = errors.New("catalog object not found")
 	ErrPublishedEventLocked = errors.New("published event is immutable")
+	ErrEventGameConflict    = errors.New("event already contains another version of this game")
 	catalogSlugPattern      = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	catalogSHA256Pattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
@@ -674,7 +675,7 @@ func (s *Store) SaveEventGameAtomic(ctx context.Context, value EventGame, audit 
 	if err = tx.QueryRowContext(ctx, `SELECT status FROM events WHERE id=?`, value.EventID).Scan(&status); err != nil {
 		return err
 	}
-	if status != "draft" {
+	if status == "archived" {
 		return ErrPublishedEventLocked
 	}
 	if value.Revision == 0 {
@@ -699,6 +700,13 @@ func (s *Store) SaveEventGameAtomic(ctx context.Context, value EventGame, audit 
 			return errors.New("disabled source cannot be assigned")
 		case !sourceID.Valid && launcherAdapter == "standalone":
 			return errors.New("standalone game version has no package source")
+		}
+		var conflicting int64
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_games existing JOIN game_versions old_version ON old_version.id=existing.game_version_id JOIN game_versions new_version ON new_version.id=? WHERE existing.event_id=? AND old_version.game_id=new_version.game_id`, value.GameVersionID, value.EventID).Scan(&conflicting); err != nil {
+			return err
+		}
+		if conflicting > 0 {
+			return ErrEventGameConflict
 		}
 	}
 	var result sql.Result
@@ -738,7 +746,7 @@ func (s *Store) DeleteEventGameAtomic(ctx context.Context, eventID, gameVersionI
 	if err = tx.QueryRowContext(ctx, `SELECT status FROM events WHERE id=?`, eventID).Scan(&status); err != nil {
 		return err
 	}
-	if status != "draft" {
+	if status == "archived" {
 		return ErrPublishedEventLocked
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM event_games WHERE event_id=? AND game_version_id=? AND revision=?`, eventID, gameVersionID, expectedRevision)

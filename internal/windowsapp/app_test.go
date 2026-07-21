@@ -23,6 +23,30 @@ import (
 	"github.com/containerguy/lan_installer/internal/store"
 )
 
+func TestPurposeBoundReleaseKeysRejectEventKeyForClientUpdate(t *testing.T) {
+	updatePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventPublic, eventPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewWithPurposeKeys(filepath.Join(t.TempDir(), "device.json"), "0.2.0", []ed25519.PublicKey{updatePublic}, []ed25519.PublicKey{eventPublic})
+	payload := []byte(`{"formatVersion":1,"channel":"stable","sequence":1,"version":"0.3.0","minimumVersion":"0.2.0","artifactKind":"portable_exe","updaterProtocol":1,"publisherCertificateSHA256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","artifactPath":"/v2/client/artifacts/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":42,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","publishedAt":"2026-07-20T12:00:00Z"}`)
+	envelope, err := protocol.SignEnvelope(payload, eventPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(envelope)
+	if _, _, _, err = app.releaseValidator.ValidateClientUpdateEnvelope(raw, app.trustedUpdateKeys); err == nil {
+		t.Fatal("client update signed by the online event key was accepted")
+	}
+	if _, trusted := app.trustedEventKeys[protocol.KeyID(eventPublic)]; !trusted {
+		t.Fatal("event key missing from event-only keyring")
+	}
+}
+
 func signedEventReadinessEnvelope(t *testing.T, privateKey ed25519.PrivateKey, sequence int64) []byte {
 	t.Helper()
 	now := time.Now().UTC()
@@ -331,7 +355,7 @@ func TestStateVerifiesActiveEventAndRejectsRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := "200"
-	app := New(profilePath, "1.0.0", publicKey)
+	app := NewWithPurposeKeys(profilePath, "1.0.0", nil, []ed25519.PublicKey{publicKey})
 	app.httpClient = server.Client()
 	app.discover = func() (discovery.Result, error) {
 		return discovery.Result{Installations: []discovery.Installation{{Launcher: "steam", ExternalGameID: "730", DisplayName: "Counter-Strike 2", DetectedVersion: &version}}}, nil

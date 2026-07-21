@@ -1,6 +1,6 @@
 # LANReady
 
-LANReady wird als selbst gehostete Plattform zum Vorbereiten von Windows-PCs für eine LAN-Party entwickelt. Der gestaltete Windows-Client kann einen PC sicher enrollen, installierte Spiele erkennen und eine vom Benutzer bestätigte Auswahl nach persönlicher Browser-Anmeldung an den Managementserver synchronisieren. Management-UI und Geräte-API veröffentlichen unveränderliche, offline signierte Event- und Client-Releases. Der Windows-Client lädt Pflichtupdates fortsetzbar, prüft Ed25519-Envelope, Sequenz, Version, Größe, SHA-256 sowie Windows-Authenticode und ersetzt sich mit automatischem Health-Check-Rollback.
+LANReady wird als selbst gehostete Plattform zum Vorbereiten von Windows-PCs für eine LAN-Party entwickelt. Der gestaltete Windows-Client kann einen PC sicher enrollen, installierte Spiele erkennen und eine vom Benutzer bestätigte Auswahl nach persönlicher Browser-Anmeldung an den Managementserver synchronisieren. Management-UI und Geräte-API veröffentlichen unveränderliche, isoliert signierte Event- und Client-Releases. Der Windows-Client lädt Pflichtupdates fortsetzbar, prüft Ed25519-Envelope, Sequenz, Version, Größe, SHA-256 sowie Windows-Authenticode und ersetzt sich mit automatischem Health-Check-Rollback.
 
 LANReady speichert keine Launcher-Zugangsdaten und umgeht weder DRM noch Lizenzprüfungen. Kommerzielle Inhalte dürfen nur an Teilnehmer verteilt werden, die die erforderlichen Nutzungsrechte besitzen.
 
@@ -217,13 +217,13 @@ Die GUI basiert auf der stabilen Wails-v2-Linie und nutzt unter Windows 11 Micro
 
 ```bash
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
-make windows-gui VERSION=0.1.0
+make windows-gui VERSION=0.2.0
 ```
 
 Ein veröffentlichbares Paket wird ausschließlich auf einer vertrauenswürdigen Windows-Buildstation mit Windows SDK/SignTool, NSIS und einem öffentlich vertrauenswürdigen Code-Signing-Zertifikat erzeugt. `VERSION` muss mit `wails.json` übereinstimmen; EXE, Uninstaller und Installer werden mit SHA-256 signiert, RFC-3161-zeitgestempelt und anschließend gegen die Authenticode-Policy sowie den fest erwarteten SHA-256-Fingerprint des DER-Zertifikats geprüft:
 
 ```powershell
-make windows-package VERSION=0.1.0 `
+make windows-package VERSION=0.2.0 `
   AUTHENTICODE_PUBLISHER_SHA256=<64-lowercase-hex> `
   CERTIFICATE_THUMBPRINT=<40-hex> `
   TIMESTAMP_URL=<CA-RFC3161-URL> `
@@ -234,47 +234,40 @@ Der Build erzeugt:
 
 ```text
 dist/
-├── LANReady-0.1.0-windows-x64-portable.zip
-└── LANReady-0.1.0-windows-x64-setup.exe
+├── LANReady-0.2.0-windows-x64-portable.zip
+└── LANReady-0.2.0-windows-x64-setup.exe
 ```
 
 Der Installer arbeitet ausschließlich im aktuellen Benutzerkontext, installiert nach `%LOCALAPPDATA%\Programs\LANReady`, erzeugt Desktop- und Startmenüeinträge und registriert einen Task-Scheduler-Start bei Benutzeranmeldung mit `--lanready-agent` und `LIMITED`-Rechten. Der Agent startet versteckt, prüft Stable-Updates alle 30 Minuten, benachrichtigt den Benutzer und zeigt bei einem zweiten normalen Start dieselbe GUI. Schließen blendet den Agenten aus; unter Einstellungen kann er für die laufende Sitzung vollständig beendet werden. Die portable Variante erzeugt weder Installation noch Autostart. Falls WebView2 fehlt, verwendet das Setup ausschließlich den offiziellen Microsoft-Evergreen-Bootstrapper. Das NSIS-Paket nutzt einen soliden LZMA-Datenstrom und wird nach dem Build vollständig als Archiv geprüft.
 
-Die aktuellen `0.1.0`-Artefakte sind noch nicht Authenticode-signiert und deshalb Entwicklungsartefakte, kein freigegebenes MVP-Release. Der Self-Updater lehnt solche unsignierten Dateien ausdrücklich ab. Vor der Freigabe müssen EXE und Installer mit demselben öffentlich vertrauenswürdigen Herausgeberzertifikat signiert, zeitgestempelt und auf einem sauberen Windows-11-Standardbenutzer geprüft werden. Das Release-Envelope bleibt eine zweite, unabhängige Signaturgrenze und bindet exakt Sequenz, Version, Größe und SHA-256 des Artefakts.
+Die aktuellen `0.2.0`-Artefakte sind noch nicht Authenticode-signiert und deshalb Entwicklungsartefakte, kein freigegebenes MVP-Release. Der Self-Updater lehnt solche unsignierten Dateien ausdrücklich ab. Vor der Freigabe müssen EXE und Installer mit demselben öffentlich vertrauenswürdigen Herausgeberzertifikat signiert, zeitgestempelt und auf einem sauberen Windows-11-Standardbenutzer geprüft werden. Das Release-Envelope bleibt eine zweite, unabhängige Signaturgrenze und bindet exakt Sequenz, Version, Größe und SHA-256 des Artefakts.
 
 ## Signierte Event- und Client-Releases
 
-LANReady trennt Signer und Managementserver. Der Server liest ausschließlich einen oder mehrere Ed25519-Public-Keys; der Private Key wird nur in einem netzwerklosen, nicht privilegierten Tool-Container verwendet. Er darf weder in `/data`, ein Serverimage noch ein Server-Secret gelangen.
+LANReady verwendet zwei getrennte Ed25519-Schlüssel. Der bisherige Offline-Schlüssel signiert neue Clientupdates; ein eigener Online-Eventschlüssel ermöglicht den einfachen Browserablauf. Dessen Private Key wird als read-only Docker Secret nur in einen dauerhaft laufenden, netzwerklosen und nicht privilegierten Signer-Container gemountet; der Webserver erhält beide Public Keys und einen Unix-Socket, aber keinen Private Key. Der Signer akzeptiert ausschließlich schema- und semantisch gültige Event-Payloads. Sein Online-Key darf weder server- noch clientseitig Clientupdates veröffentlichen.
+
+Für die vertrauenswürdige Migration bleibt der bisherige Offline-Public-Key zusätzlich **nur zur Verifikation bereits vorhandener alter Event-Releases** im Event-Keyring. Er ist nicht der Online-Signer. Ein Rollback eines solchen Legacy-Releases wird als neue Sequenz mit Mindestclient `0.2.0` durch den Online-Event-Key neu signiert. So bleiben historische aktive Releases lesbar, ohne den exponierteren Online-Key für Updates zu autorisieren.
 
 Ein Schlüsselpaar wird einmalig im separaten Arbeitsverzeichnis erzeugt:
 
 ```bash
 mkdir -p release-work secrets
 docker compose --profile tools run --rm signer keygen \
-  -private-key release-private.key \
-  -public-key release-public.key
-cp release-work/release-public.key secrets/release-public.key
-chmod 600 release-work/release-private.key
+  -private-key event-release-private.key \
+  -public-key event-release-public.key
+cp release-work/event-release-public.key secrets/event-release-public.key
+chmod 600 release-work/event-release-private.key secrets/event-release-public.key
 ```
 
-Der Private Key benötigt ein verschlüsseltes, offline geprüftes Backup. Sein Verlust verhindert neue Releases; sein Bekanntwerden erfordert eine dokumentierte Schlüsselrotation. Der Public Key wird über `LANREADY_RELEASE_PUBLIC_KEY_FILE` als Docker Secret ausschließlich lesbar in den Server gemountet.
+Der Event-Private-Key benötigt ein separates verschlüsseltes, offline geprüftes Backup. Das normale Secret-Backup kopiert ihn ausdrücklich nicht. Sein Verlust verhindert neue browserbasierte Event-Releases; sein Bekanntwerden erfordert eine dokumentierte Schlüsselrotation. `LANREADY_RELEASE_PUBLIC_KEY_FILE` bezeichnet den Offline-Clientupdate-Public-Key, `LANREADY_EVENT_RELEASE_PUBLIC_KEY_FILE` und `LANREADY_EVENT_RELEASE_PRIVATE_KEY_FILE` das getrennte Event-Schlüsselpaar. Server und Backupwerkzeug prüfen vor dem Start beziehungsweise Restore, dass der konfigurierte Event-Public-Key zum Signer-Key passt.
 
-Ein Event-Payload wird ohne Netzwerkzugriff signiert und anschließend noch einmal lokal gegen Schema, Semantik und Signatur geprüft. Der aktuelle Stand erzeugt einen initialen `event-release.json`-Kandidaten noch nicht aus Katalog und Eventzuordnungen; er muss daher manuell entsprechend [event-release-envelope.schema.json](docs/contracts/schemas/event-release-envelope.schema.json) erstellt werden.
+Event-Releases werden vollständig im Browser veröffentlicht: Unter **Events → Event veröffentlichen** Event, Gültigkeitsende und älteste unterstützte LANReady-Version wählen, optional die sofortige Aktivierung abwählen und **Release erstellen, signieren und veröffentlichen** bestätigen. Der Server baut den Payload aus den Eventzuordnungen, ermittelt die nächste monotone Sequenz, lässt ihn isoliert signieren und prüft danach Schema, Semantik, Key-ID, Signatur, Gültigkeit und jedes CAS-Artefakt erneut. Ein Fehler veröffentlicht und aktiviert nichts.
 
-Bekannter P1-Blocker: Das Schema verlangt derzeit für jedes Spiel mindestens ein Artefakt-Payload. Eine im Katalog zulässige, ausschließlich über Steam/EA/Ubisoft bezogene Version ohne eigenes LANReady-Paket kann deshalb noch nicht sinnvoll als signiertes Event veröffentlicht werden. Keine Dummy-/Fake-Artefakte verwenden; Kandidatengenerator und Provider-only-Vertrag müssen gemeinsam korrigiert werden.
+Die Sofortaktivierung ist standardmäßig aus. Vor jeder Aktivierung prüft der Server zwei Voraussetzungen: Im Stable-Kanal muss ein mit dem getrennten Offline-Key und dem erwarteten Authenticode-Herausgeber signiertes Clientupdate auf mindestens die Release-Mindestversion liegen, und alle aktiven PCs müssen diese Laufzeitversion bereits gemeldet haben. Ein älterer Client blockiert die Auslieferung mit PC-Name und Versionsstand. Nach dem sicheren Client-Rollout kann die bereits signierte Sequenz direkt aus der Historie aktiviert werden. Auch browser-signierte Rollbacks verlangen wegen des neuen Event-Keyrings mindestens Client `0.2.0`.
 
-```bash
-docker compose --profile tools run --rm signer sign-event \
-  -in event-release.json \
-  -out event-envelope.json \
-  -private-key release-private.key
+Steam-, EA-App- und Ubisoft-Connect-Versionen werden als providerverwaltete Spiele ohne Fake-Artefakte aufgenommen. Der Mindestclient `0.2.0` verhindert, dass ältere Clients diesen Vertrag falsch interpretieren. Spiele des Typs **Ohne Launcher** und Versionen mit LANReady-Paket werden derzeit von der Veröffentlichungsprüfung mit konkreter Ursache blockiert: Der Windows-Client kann diese Pakete noch nicht sicher installieren. Diese Sperre gilt zentral auch für den Experten-Upload, die Aktivierung gespeicherter Sequenzen und Rollbacks; sie wird erst nach dem separaten Installations-Slice aufgehoben.
 
-docker compose --profile tools run --rm signer verify-event \
-  -in event-envelope.json \
-  -public-key release-public.key
-```
-
-Unter **Events → Signiertes Event-Release veröffentlichen** wird nur `event-envelope.json` ausgewählt. Die UI zeigt Event-ID, Sequenz, Zahl der Spiele und Artefakte sowie die Key-ID zur Kontrolle. Der Server prüft anschließend das Originalschema, doppelte JSON-Felder, Ed25519-Signatur und Key-ID, monotone Sequenz, Gültigkeitsfenster und alle CAS-Referenzen in einer Transaktion. Ein Fehler veröffentlicht und aktiviert nichts.
+Das Kommandozeilenwerkzeug `lanready-release` bleibt ausschließlich als Wiederherstellungs-/Expertenwerkzeug erhalten; für normale Eventveröffentlichungen ist keine JSON-Datei und kein Docker-Befehl erforderlich.
 
 Clientupdates verwenden entsprechend `sign-update` und `verify-update`. Der Payload bindet zusätzlich `artifactKind: "portable_exe"`, `updaterProtocol: 1` und `publisherCertificateSHA256`. Derselbe Zertifikatsfingerprint muss beim GUI-Build eingebettet und auf dem Server als `LANREADY_AUTHENTICODE_PUBLISHER_SHA256` konfiguriert sein; ohne ihn verweigert der Server Clientupdate-Publishing. Ed25519 bindet die Release-Policy und den exakten SHA-256-Digest, Authenticode prüft unabhängig Windows-Vertrauenskette und erwarteten Herausgeber.
 

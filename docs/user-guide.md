@@ -121,22 +121,21 @@ Die Operation ist atomar: Ist ein Eintrag veraltet oder ungültig, wird nichts a
 
 ## 10. Signiertes Event-Release veröffentlichen
 
-Die Eventzuordnung allein wird noch nicht an Clients ausgeliefert. Der aktuelle Stand besitzt noch keinen Generator, der aus Katalog und Zuordnungen automatisch einen initialen `event-release.json`-Kandidaten baut. Ein Payload für vollständig im CAS vorhandene Pakete wird deshalb entsprechend dem verbindlichen Schema manuell erstellt, im netzwerklosen Signer signiert und direkt wieder geprüft:
+Die Eventzuordnung allein wird noch nicht an Clients ausgeliefert. Als Admin veröffentlichst du sie vollständig über die Weboberfläche:
 
-```bash
-docker compose --profile tools run --rm signer sign-event \
-  -in event-release.json \
-  -out event-envelope.json \
-  -private-key release-private.key
+1. **Events** öffnen und prüfen, ob alle gewünschten Spielversionen zugeordnet sind.
+2. Unter **Event veröffentlichen** das Event auswählen.
+3. Ein zukünftiges Gültigkeitsende und die älteste unterstützte LANReady-Version angeben; für den neuen providerverwalteten Vertrag bleibt `0.2.0` bestehen.
+4. **Sofort als aktives Event … ausliefern** nur aktivieren, wenn alle eingesetzten Clients mindestens Version `0.2.0` verwenden und das Event direkt erhalten sollen. Standardmäßig bleibt die sichere, noch nicht aktive Veröffentlichung gewählt.
+5. **Release erstellen, signieren und veröffentlichen** wählen und die Auswirkung bestätigen.
 
-docker compose --profile tools run --rm signer verify-event \
-  -in event-envelope.json \
-  -public-key release-public.key
-```
+LANReady erzeugt den Payload automatisch aus dem Katalog, vergibt die nächste Sequenz, signiert im netzwerklosen Signer und prüft anschließend Signatur, Gültigkeit und Cacheartefakte erneut. Du musst keine JSON-Datei erstellen, keinen Schlüssel auswählen und keinen Docker-Befehl ausführen.
 
-Danach unter **Events → Signiertes Event-Release veröffentlichen** ausschließlich `event-envelope.json` auswählen, Vorschau und Key-ID prüfen und entscheiden, ob die neue Sequenz sofort aktiviert werden soll. Der Server prüft Signatur, Key-ID, Schema, Event-ID, monotone Sequenz, Gültigkeitsfenster und alle CAS-Referenzen atomar. Bei einem Fehler wird nichts veröffentlicht oder aktiviert.
+Vor der Aktivierung verlangt LANReady zuerst ein vollständig signiertes Stable-Clientupdate auf mindestens die Release-Mindestversion. Zusätzlich prüft es die zuletzt von jedem aktiven PC gemeldete Clientversion. Ist ein PC älter, bleibt die Auslieferung blockiert und die Fehlermeldung nennt PC und Versionsstand. Rolle dort zuerst den aktuellen Client aus und starte ihn einmal; danach kann die bereits veröffentlichte Sequenz aus der Historie aktiviert werden. Nicht mehr verwendete PCs können unter **Clients** widerrufen werden.
 
-Bekannter P1-Blocker: Das derzeitige Release-Schema verlangt für jedes Spiel mindestens ein Artefakt-Payload. Eine über Steam, EA App oder Ubisoft Connect geführte Version ohne eigenes LANReady-Paket kann daher noch nicht sinnvoll veröffentlicht werden, obwohl sie im Katalog einem Event zugeordnet werden darf. Keine Dummy-Artefakte eintragen. Dieser Vertragskonflikt und der fehlende Kandidatengenerator müssen vor der MVP-Abnahme geschlossen werden.
+Steam-, EA-App- und Ubisoft-Spiele werden über ihren Launcher verwaltet. Spiele **Ohne Launcher** und Spielversionen mit LANReady-Paket blockiert die Prüfung derzeit bewusst: Der Windows-Client kann diese Dateien noch nicht zuverlässig installieren. Die UI nennt jedes betroffene Spiel und die Ursache. Deaktivierte, unvollständige oder widersprüchliche Zuordnungen blockieren die Veröffentlichung ebenfalls atomar.
+
+Ohne Sofortaktivierung erscheint die signierte Sequenz nur in der Release-Historie. Sie kann später aktiviert werden. Frühere Inhalte dürfen wegen des Anti-Rollback-Schutzes nicht direkt reaktiviert werden; dafür ist weiterhin eine neue höhere Sequenz erforderlich.
 
 ## 11. Events und Bereitschaft
 

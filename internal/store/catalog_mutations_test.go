@@ -219,6 +219,35 @@ func TestEventGameCreateRequiresActiveChain(t *testing.T) {
 	}
 }
 
+func TestEventRejectsTwoVersionsOfSameGame(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "event-version-conflict.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	launchers, _ := s.Launchers(ctx)
+	var steamID int64
+	for _, launcher := range launchers {
+		if launcher.Adapter == "steam" {
+			steamID = launcher.ID
+		}
+	}
+	gameID, err := s.SaveGameAtomic(ctx, Game{Slug: "cs2", Name: "Counter-Strike 2", LauncherID: steamID, ExternalGameID: "730", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.SaveGameVersionAtomic(ctx, GameVersion{GameID: gameID, Version: "1", Enabled: true}, nil)
+	second, _ := s.SaveGameVersionAtomic(ctx, GameVersion{GameID: gameID, Version: "2", Enabled: true}, nil)
+	eventID, _ := s.SaveEventAtomic(ctx, Event{Slug: "lan", Name: "LAN", Status: "draft"}, nil)
+	if err = s.SaveEventGameAtomic(ctx, EventGame{EventID: eventID, GameVersionID: first, Required: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SaveEventGameAtomic(ctx, EventGame{EventID: eventID, GameVersionID: second, Required: true}, nil); !errors.Is(err, ErrEventGameConflict) {
+		t.Fatalf("second version returned %v", err)
+	}
+}
+
 func TestLauncherManagedGameVersionDoesNotRequirePackageSource(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(filepath.Join(t.TempDir(), "launcher-managed.db"))
@@ -321,9 +350,6 @@ func TestPublishedEventLocksReferencedGraph(t *testing.T) {
 			_, err := s.SaveEventAtomic(ctx, Event{ID: eventID, Revision: 1, Slug: "published-event", Name: "Changed", Status: "draft"}, nil)
 			return err
 		}},
-		{"assignment update", func() error {
-			return s.SaveEventGameAtomic(ctx, EventGame{EventID: eventID, GameVersionID: versionID, Revision: 1, Required: false}, nil)
-		}},
 		{"launcher update", func() error {
 			_, err := s.SaveLauncherAtomic(ctx, Launcher{ID: launcher.ID, Revision: launcher.Revision, Slug: launcher.Slug, Name: "Changed", Adapter: launcher.Adapter, Enabled: true}, nil)
 			return err
@@ -341,7 +367,6 @@ func TestPublishedEventLocksReferencedGraph(t *testing.T) {
 		}},
 		{"game deactivate", func() error { return s.SetCatalogEnabledAtomic(ctx, "game", gameID, 1, false, nil) }},
 		{"game version deactivate", func() error { return s.SetCatalogEnabledAtomic(ctx, "game-version", versionID, 1, false, nil) }},
-		{"assignment delete", func() error { return s.DeleteEventGameAtomic(ctx, eventID, versionID, 1, nil) }},
 		{"event delete", func() error { return s.DeleteCatalogAtomic(ctx, "event", eventID, 1, nil) }},
 	}
 	for _, check := range checks {
@@ -350,6 +375,12 @@ func TestPublishedEventLocksReferencedGraph(t *testing.T) {
 				t.Fatalf("published graph mutation returned %v", err)
 			}
 		})
+	}
+	if err = s.SaveEventGameAtomic(ctx, EventGame{EventID: eventID, GameVersionID: versionID, Revision: 1, Required: false}, nil); err != nil {
+		t.Fatalf("published event assignment update: %v", err)
+	}
+	if err = s.DeleteEventGameAtomic(ctx, eventID, versionID, 2, nil); err != nil {
+		t.Fatalf("published event assignment delete: %v", err)
 	}
 }
 

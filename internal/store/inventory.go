@@ -126,6 +126,29 @@ func (s *Store) ActiveDevice(ctx context.Context, deviceID string) (Device, erro
 	return device, nil
 }
 
+func (s *Store) ActiveDevices(ctx context.Context) ([]Device, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,windows_version,client_version,client_version_high_watermark,status,enrolled_at,last_seen_at FROM devices WHERE status='active' ORDER BY name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	devices := []Device{}
+	for rows.Next() {
+		var device Device
+		var enrolledAt int64
+		var lastSeenAt sql.NullInt64
+		if err = rows.Scan(&device.ID, &device.Name, &device.WindowsVersion, &device.ClientVersion, &device.ClientVersionHighWatermark, &device.Status, &enrolledAt, &lastSeenAt); err != nil {
+			return nil, err
+		}
+		device.EnrolledAt = time.Unix(enrolledAt, 0).UTC()
+		if lastSeenAt.Valid {
+			device.LastSeenAt = time.Unix(lastSeenAt.Int64, 0).UTC()
+		}
+		devices = append(devices, device)
+	}
+	return devices, rows.Err()
+}
+
 func (s *Store) UpdateActiveDeviceClientVersion(ctx context.Context, deviceID, version string) error {
 	if _, err := protocol.CompareSemanticVersions(version, "0.0.0"); err != nil {
 		return errors.New("device client version is invalid")

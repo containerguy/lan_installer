@@ -45,8 +45,10 @@ func main() {
 	secureCookies := flag.Bool("secure-cookies", envOr("LANREADY_SECURE_COOKIES", "true") != "false", "Cookies ausschließlich über HTTPS senden")
 	publicURL := flag.String("public-url", os.Getenv("LANREADY_PUBLIC_URL"), "Öffentliche HTTPS-URL für die Browser-Anmeldung")
 	trustedProxyCIDRs := flag.String("trusted-proxy-cidrs", os.Getenv("LANREADY_TRUSTED_PROXY_CIDRS"), "Vertrauenswürdige Reverse-Proxy-CIDRs für X-Forwarded-For")
-	releasePublicKeyFiles := flag.String("release-public-key-files", os.Getenv("LANREADY_RELEASE_PUBLIC_KEY_FILES"), "Kommagetrennte Ed25519-Public-Key-Dateien für signierte Releases")
+	releasePublicKeyFiles := flag.String("release-public-key-files", os.Getenv("LANREADY_RELEASE_PUBLIC_KEY_FILES"), "Kommagetrennte Ed25519-Public-Key-Dateien ausschließlich für Clientupdates")
+	eventReleasePublicKeyFiles := flag.String("event-release-public-key-files", os.Getenv("LANREADY_EVENT_RELEASE_PUBLIC_KEY_FILES"), "Kommagetrennte Ed25519-Public-Key-Dateien ausschließlich für Event-Releases")
 	releaseSchemaDir := flag.String("release-schema-dir", envOr("LANREADY_RELEASE_SCHEMA_DIR", "/usr/share/lanready/schemas"), "Verzeichnis der verbindlichen Release-JSON-Schemata")
+	releaseSignerSocket := flag.String("release-signer-socket", os.Getenv("LANREADY_RELEASE_SIGNER_SOCKET"), "Unix-Socket des isolierten Event-Signers")
 	authenticodePublisherSHA256 := flag.String("authenticode-publisher-sha256", os.Getenv("LANREADY_AUTHENTICODE_PUBLISHER_SHA256"), "SHA-256 des erwarteten Authenticode-Herausgeberzertifikats")
 	showVersion := flag.Bool("version", false, "Version ausgeben")
 	flag.Parse()
@@ -124,26 +126,54 @@ func main() {
 			log.Fatalf("Cache-Worker starten: %v", err)
 		}
 		var adminOptions = []webadmin.Option{webadmin.WithSourceTester(probe), webadmin.WithArtifactStore(artifactStore)}
-		if strings.TrimSpace(*releasePublicKeyFiles) != "" {
+		if strings.TrimSpace(*releasePublicKeyFiles) != "" && strings.TrimSpace(*eventReleasePublicKeyFiles) != "" {
 			validator, validatorErr := protocol.NewReleaseValidator(*releaseSchemaDir)
 			if validatorErr != nil {
 				log.Fatalf("Release-Schemata: %v", validatorErr)
 			}
-			trustedKeys := make(map[string]ed25519.PublicKey)
+			trustedUpdateKeys := make(map[string]ed25519.PublicKey)
 			for _, keyFile := range strings.Split(*releasePublicKeyFiles, ",") {
 				publicKey, keyErr := signing.ReadPublicKey(strings.TrimSpace(keyFile))
 				if keyErr != nil {
 					log.Fatalf("Release-Public-Key: %v", keyErr)
 				}
-				trustedKeys[protocol.KeyID(publicKey)] = publicKey
+				trustedUpdateKeys[protocol.KeyID(publicKey)] = publicKey
 			}
-			releaseService, serviceErr := lanrelease.New(database, validator, trustedKeys, artifactStore, *authenticodePublisherSHA256)
+			trustedEventKeys := make(map[string]ed25519.PublicKey)
+			for _, keyFile := range strings.Split(*eventReleasePublicKeyFiles, ",") {
+				publicKey, keyErr := signing.ReadPublicKey(strings.TrimSpace(keyFile))
+				if keyErr != nil {
+					log.Fatalf("Event-Release-Public-Key: %v", keyErr)
+				}
+				trustedEventKeys[protocol.KeyID(publicKey)] = publicKey
+			}
+			releaseService, serviceErr := lanrelease.NewWithPurposeKeyrings(database, validator, trustedEventKeys, trustedUpdateKeys, artifactStore, *authenticodePublisherSHA256)
 			if serviceErr != nil {
 				log.Fatalf("Release-Service: %v", serviceErr)
 			}
+			if strings.TrimSpace(*releaseSignerSocket) != "" {
+				signer, signerErr := signing.NewUnixEventSigner(*releaseSignerSocket)
+				if signerErr != nil {
+					log.Fatalf("Release-Signer: %v", signerErr)
+				}
+				keyContext, cancelKeyCheck := context.WithTimeout(context.Background(), 5*time.Second)
+				signerKeyID, keyErr := signer.KeyID(keyContext)
+				cancelKeyCheck()
+				if keyErr != nil {
+					log.Fatalf("Release-Signer-Health: %v", keyErr)
+				}
+				if _, trusted := trustedEventKeys[signerKeyID]; !trusted {
+					log.Fatalf("Release-Signer-Key %s ist nicht im Event-Keyring", signerKeyID)
+				}
+				if signerErr = releaseService.SetEventSigner(signer, signerKeyID); signerErr != nil {
+					log.Fatalf("Release-Signer-Keyrolle: %v", signerErr)
+				}
+			} else {
+				log.Print("Browserbasierte Event-Signierung deaktiviert: LANREADY_RELEASE_SIGNER_SOCKET ist nicht gesetzt")
+			}
 			adminOptions = append(adminOptions, webadmin.WithReleaseService(releaseService))
 		} else {
-			log.Print("Release-Publishing deaktiviert: LANREADY_RELEASE_PUBLIC_KEY_FILES ist nicht gesetzt")
+			log.Print("Release-Publishing deaktiviert: Update- und Event-Public-Key-Dateien müssen gesetzt sein")
 		}
 		adminHandler = webadmin.New(database, *secureCookies, vault, adminOptions...)
 		deviceHandler, err = deviceapi.NewWithArtifactStore(database, *publicURL, artifactStore, *trustedProxyCIDRs)

@@ -35,7 +35,7 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 - Benutzer dürfen vorgeschlagene Installation/Updates ablehnen und erhalten dann eine Warnung. Unattended oder manuelle Bestätigung soll später wählbar sein. Kein automatischer Snapshot vor Clientinstallationen.
 - Client darf lokal cachen und später im selben Netz verteilen. P2P ist noch nicht implementiert.
 - Ein Admin ist vorhanden. Rollenmodell existiert, aber Benutzer-/Rollen-UI und Entra-ID-SSO sind noch offen.
-- Release-Signaturschlüssel: Private Key getrennt/offline; Server erhält nur Public Key. Produktive Clientupdates bleiben ohne vertrauenswürdiges Authenticode-Zertifikat fail-closed.
+- Release-Schlüssel sind zweckgebunden: Der bisherige Offline-Key signiert Clientupdates und verifiziert zusätzlich historische Legacy-Events; ein nachweislich verschiedener Online-Event-Key signiert Browser-Events im netzwerklosen Signer-Container. Der Webserver erhält nur Public Keys und Unix-Socket. Der Online-Private-Key bleibt aus normalen Backups ausgeschlossen und benötigt ein verschlüsseltes Offlinebackup. Produktive Clientupdates bleiben ohne vertrauenswürdiges Authenticode-Zertifikat fail-closed.
 
 ## Implementierter Stand
 
@@ -66,7 +66,7 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 1. Reale Installations-/Updateorchestrierung für Steam, EA App, Ubisoft Connect und Spiele einschließlich Benutzerbestätigung/Ablehnung.
 2. Reale Windows-11-Ende-zu-Ende-Matrix für alle Launcheradapter, manuelle EXE, per-user Task Scheduler, Benachrichtigungen und Self-Update.
 3. Öffentlich vertrauenswürdige Authenticode-Signatur und zeitgestempelter Releasebuild.
-4. **P1:** Automatisch aus Katalog/CAS erzeugter Event-Kandidat und Korrektur des Releasevertrags für Provider-only-Spielversionen. Der Katalog erlaubt Steam/EA/Ubisoft-Versionen ohne LANReady-Paket, das Event-Release-Schema verlangt aber pro Spiel mindestens ein Artefakt-Payload. Solche Zuordnungen lassen sich aktuell nicht sinnvoll signiert veröffentlichen; keine Dummy-Artefakte verwenden.
+4. **In Umsetzung/Review:** Event-Releases vollständig im Browser erzeugen, mit getrenntem Online-Event-Key isoliert signieren, veröffentlichen und aktivieren. Providerverwaltete Steam-/EA-/Ubisoft-Versionen benötigen keine Fake-Artefakte und erzwingen Client `>=0.2.0`. Jede Aktivierung verlangt zusätzlich ein kompatibles, offline/Authenticode-signiertes Stable-Clientupdate und passende Laufzeitversionen aller aktiven PCs. Standalone- und paketbasierte Releases sind zentral in allen Publish-/Activate-Pfaden bis zum Windows-Installations-Slice gesperrt. Im produktiven Event betrifft dies FlatOut 2 und WC3 TFT. Beide verweisen zusätzlich mit unterschiedlichen Dateinamen auf denselben SHA-256/Blob; nicht automatisch korrigieren.
 5. Benutzer-/Rollenverwaltung in der UI; Entra-ID-SSO danach als optionaler Slice.
 6. Scheduler und Bereinigung verwaister/alter Ingest-Temporärdateien; Worker-HTTP-Resume beginnt derzeit nach Neustart wieder bei Byte 0.
 
@@ -76,3 +76,10 @@ Diese Datei ist der kompakte, secretsfreie Einstieg für eine neue Codex-Session
 - Version: `0.1.0-test.ad9d9b5`
 - SHA-256: `8b87ce4ccc8b8dcec3e59f5682853895b2e2654bfacb514b87e66b0c32b2a166`
 - Bewusst nicht Authenticode-signiert. Der aktuelle Event-Dropdown-Fix betrifft nur den Managementserver und benötigt keine neue Windows-EXE.
+
+## Uncommitted Browser-Release-Slice
+
+- Browserformular, Preflight, automatische Signatur, monotone Sequenzen, spätere Aktivierung und idempotenter signierter Rollback sind lokal implementiert.
+- Online-Event-Key und Offline-Update-Key sind auf Server, Client, Backup und Build nach Zweck getrennt; der Offline-Public-Key bleibt als Legacy-Event-Verifikationskey erhalten. Identische Online-/Offline-Keys werden vor Build, Start und Backup abgelehnt.
+- Lokale Dokumentations-, Python-, JavaScript-, Compose- und Diff-Prüfungen sind grün. Vollständige Go-Tests, Container-Candidate, Windows-GUI-Build, Commit/Push und Deployment fehlen noch, weil der Netzwerkzugriff auf die Docker-VM in dieser Session durch das Codex-Ausführungslimit blockiert wurde. Ohne diese Gates nicht deployen.
+- Produktiv läuft weiterhin `c3ef4be`; neue Event-Key-Dateien wurden noch nicht auf den Server übertragen.

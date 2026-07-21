@@ -27,7 +27,7 @@ Windows-Client:
 git clone git@github.com:containerguy/lan_installer.git lanready
 cd lanready
 git switch agent/lanready-mvp
-mkdir -p data/cache data/content data/events secrets release-work backups
+mkdir -p data/cache data/content data/events data/signer secrets release-work backups
 chmod 700 secrets release-work backups
 ```
 
@@ -61,23 +61,25 @@ LANREADY_TRUSTED_PROXY_CIDRS=172.20.0.0/16
 
 Bei rootless Docker müssen `LANREADY_UID=0` und `LANREADY_GID=0` verwendet werden. UID 0 im Container wird dabei auf den unprivilegierten Hostbenutzer abgebildet. Bei rootful Docker werden die tatsächlichen Besitzer-IDs von `id -u` und `id -g` eingetragen.
 
-Der Server benötigt außerdem einen Ed25519-Public-Key in `secrets/release-public.key`. Das zugehörige private Schlüsselmaterial wird auf einer getrennten, vertrauenswürdigen Signierstation erzeugt und offline gesichert. Nur der Public Key wird auf den Managementserver kopiert:
+Der Server benötigt den Public Key des getrennten Offline-Schlüssels für Clientupdates und ein eigenes Online-Schlüsselpaar für Browser-Event-Releases. Der Webserver erhält ausschließlich beide Public Keys. Nur der Event-Private-Key liegt mit Modus 0600 unter `release-work/` und wird in den netzwerklosen, read-only Signer-Container gemountet. Zusätzlich ist ein verschlüsseltes Offlinebackup dieses Private Keys zwingend:
 
 ```bash
 install -m 600 /sicherer-transfer/release-public.key secrets/release-public.key
+install -m 600 /sicherer-transfer/event-release-public.key secrets/event-release-public.key
+install -m 600 /sicherer-transfer/event-release-private.key release-work/event-release-private.key
 ```
 
 Für einen reinen Entwicklungsaufbau kann ein Testschlüssel mit dem netzwerklosen Toolcontainer erzeugt werden:
 
 ```bash
 docker compose --profile tools run --rm signer keygen \
-  -private-key release-private.key \
-  -public-key release-public.key
-cp release-work/release-public.key secrets/release-public.key
-chmod 600 release-work/release-private.key secrets/release-public.key
+  -private-key event-release-private.key \
+  -public-key event-release-public.key
+cp release-work/event-release-public.key secrets/event-release-public.key
+chmod 600 release-work/event-release-private.key secrets/event-release-public.key
 ```
 
-Ein produktiver Private Key gehört nicht auf den öffentlichen Managementhost. Der vollständige Signierablauf steht im Abschnitt [Signierte Event- und Client-Releases](../README.md#signierte-event--und-client-releases).
+`LANREADY_EVENT_RELEASE_PRIVATE_KEY_FILE` zeigt auf diese Datei. Der Webserver mountet sie nicht; nur der Signer sieht sie read-only und kommuniziert ohne Netzwerk über einen Unix-Socket in `data/signer/`. `LANREADY_RELEASE_PUBLIC_KEY_FILE` bleibt der Public Key des offline verwahrten Clientupdate-Schlüssels. Zur Migration historischer Event-Releases wird dieser Public Key zusätzlich als Legacy-Verifikationskey in den Event-Keyring geladen; nur der neue, nachweislich verschiedene Event-Key darf online signieren. Der vollständige Ablauf steht unter [Signierte Event- und Client-Releases](../README.md#signierte-event--und-client-releases).
 
 Das Bootstrap-Passwort wird nur beim ersten Anlegen der Datenbank in einen Argon2id-Hash umgewandelt. Ein späteres Ändern von `secrets/web-admin-password.txt` ändert das vorhandene Webpasswort nicht.
 

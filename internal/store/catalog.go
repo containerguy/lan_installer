@@ -62,6 +62,36 @@ type EventGame struct {
 	Required                         bool
 }
 
+// EventReleaseGame is the immutable catalog input used to create an event
+// release. SourceID == 0 means that the launcher provider is responsible for
+// installing and updating the game; no LANReady package is implied.
+type EventReleaseGame struct {
+	EventID, GameVersionID, SourceID                       int64
+	EventSlug, EventName, EventStatus                      string
+	GameSlug, GameName, ExternalGameID                     string
+	LauncherSlug, LauncherAdapter, Version                 string
+	SourcePath, SHA256, ArtifactContentType                string
+	SizeBytes                                              int64
+	Required, GameEnabled, VersionEnabled, LauncherEnabled bool
+}
+
+func (s *Store) EventReleaseGames(ctx context.Context, eventID int64) ([]EventReleaseGame, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.slug,e.name,e.status,eg.game_version_id,g.slug,g.name,g.external_game_id,l.slug,l.adapter,gv.version,COALESCE(gv.source_id,0),gv.source_path,COALESCE(gv.sha256,''),COALESCE(gv.size_bytes,0),COALESCE(a.content_type,''),eg.required,g.enabled,gv.enabled,l.enabled FROM events e JOIN event_games eg ON eg.event_id=e.id JOIN game_versions gv ON gv.id=eg.game_version_id JOIN games g ON g.id=gv.game_id JOIN launchers l ON l.id=g.launcher_id LEFT JOIN artifact_blobs a ON a.digest=gv.sha256 AND a.size_bytes=gv.size_bytes WHERE e.id=? ORDER BY g.name,gv.version`, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]EventReleaseGame, 0)
+	for rows.Next() {
+		var value EventReleaseGame
+		if err = rows.Scan(&value.EventID, &value.EventSlug, &value.EventName, &value.EventStatus, &value.GameVersionID, &value.GameSlug, &value.GameName, &value.ExternalGameID, &value.LauncherSlug, &value.LauncherAdapter, &value.Version, &value.SourceID, &value.SourcePath, &value.SHA256, &value.SizeBytes, &value.ArtifactContentType, &value.Required, &value.GameEnabled, &value.VersionEnabled, &value.LauncherEnabled); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Launchers(ctx context.Context) ([]Launcher, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,slug,name,adapter,enabled FROM launchers ORDER BY name`)
 	if err != nil {
@@ -190,6 +220,12 @@ func (s *Store) Events(ctx context.Context) ([]Event, error) {
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) EventByID(ctx context.Context, id int64) (Event, error) {
+	var value Event
+	err := s.db.QueryRowContext(ctx, `SELECT id,revision,slug,name,COALESCE(starts_at,''),COALESCE(ends_at,''),status FROM events WHERE id=?`, id).Scan(&value.ID, &value.Revision, &value.Slug, &value.Name, &value.StartsAt, &value.EndsAt, &value.Status)
+	return value, err
 }
 func (s *Store) EventGames(ctx context.Context) ([]EventGame, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT eg.event_id,eg.game_version_id,eg.revision,e.name,g.name,gv.version,eg.required FROM event_games eg JOIN events e ON e.id=eg.event_id JOIN game_versions gv ON gv.id=eg.game_version_id JOIN games g ON g.id=gv.game_id ORDER BY e.name,g.name`)

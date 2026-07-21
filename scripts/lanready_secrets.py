@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -13,7 +14,8 @@ import tempfile
 from pathlib import Path
 
 
-SECRET_NAMES = ("web_admin_password", "webdav_master_key", "release_public_key")
+SECRET_NAMES = ("web_admin_password", "webdav_master_key", "release_public_key", "event_release_public_key")
+EVENT_PRIVATE_NAME = "event_release_private_key"
 COMPOSE_COMMAND = ("docker", "compose", "-f", "compose.yaml", "-f", "compose.npm.yaml")
 
 
@@ -38,6 +40,32 @@ def configured_paths(config: dict) -> dict[str, Path]:
     return result
 
 
+def configured_secret_path(config: dict, name: str) -> Path:
+    value = config.get("secrets", {}).get(name, {}).get("file")
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Compose secret {name!r} has no source file")
+    return Path(value).expanduser().absolute()
+
+
+def require_event_key_pair(public_path: Path, private_path: Path) -> None:
+    require_regular_file(public_path, "event release public key")
+    require_regular_file(private_path, "event release private key")
+    try:
+        public_key = base64.b64decode(public_path.read_bytes().strip(), validate=True)
+        private_key = base64.b64decode(private_path.read_bytes().strip(), validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise ValueError("event release key pair is not valid base64") from error
+    if len(public_key) != 32 or len(private_key) != 64 or private_key[32:] != public_key:
+        raise ValueError("event release public and private keys do not match")
+
+
+def require_distinct_release_keys(update_public_path: Path, event_public_path: Path) -> None:
+    require_regular_file(update_public_path, "client update public key")
+    require_regular_file(event_public_path, "event release public key")
+    if update_public_path.read_bytes().strip() == event_public_path.read_bytes().strip():
+        raise ValueError("client update and event release public keys must be different")
+
+
 def require_regular_file(path: Path, label: str) -> None:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -48,6 +76,8 @@ def backup(config: dict, destination: Path) -> None:
     sources = configured_paths(config)
     for name, source in sources.items():
         require_regular_file(source, f"source for {name}")
+    require_event_key_pair(sources["event_release_public_key"], configured_secret_path(config, EVENT_PRIVATE_NAME))
+    require_distinct_release_keys(sources["release_public_key"], sources["event_release_public_key"])
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     manifest: dict[str, str] = {}
     for name, source in sources.items():
@@ -83,6 +113,9 @@ def restore(config: dict, source_directory: Path) -> None:
     require_regular_file(manifest_path, "secret manifest")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     current = configured_paths(config)
+    # Validate the complete future pair before replacing any current secret.
+    require_event_key_pair(source_directory / "event_release_public_key.secret", configured_secret_path(config, EVENT_PRIVATE_NAME))
+    require_distinct_release_keys(source_directory / "release_public_key.secret", source_directory / "event_release_public_key.secret")
     for name in SECRET_NAMES:
         expected = manifest.get(name)
         if expected != str(current[name]):

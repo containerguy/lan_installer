@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -7,6 +8,14 @@ from scripts.lanready_secrets import SECRET_NAMES, backup, restore
 
 
 class SecretBackupRestoreTest(unittest.TestCase):
+    def add_event_private_key(self, config: dict, root: Path) -> None:
+        public = b"p" * 32
+        Path(config["secrets"]["event_release_public_key"]["file"]).write_bytes(base64.b64encode(public) + b"\n")
+        private_path = root / "event-release-private.key"
+        private_path.write_bytes(base64.b64encode(b"s" * 32 + public) + b"\n")
+        os.chmod(private_path, 0o600)
+        config["secrets"]["event_release_private_key"] = {"file": str(private_path)}
+
     def test_round_trip_with_all_sources_outside_repo_secret_directory(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -21,6 +30,9 @@ class SecretBackupRestoreTest(unittest.TestCase):
                 os.chmod(path, 0o600)
                 originals[name] = content
                 config["secrets"][name] = {"file": str(path)}
+
+            self.add_event_private_key(config, root)
+            originals["event_release_public_key"] = Path(config["secrets"]["event_release_public_key"]["file"]).read_bytes()
 
             backup_directory = root / "backup" / "resolved-secrets"
             backup(config, backup_directory)
@@ -41,6 +53,7 @@ class SecretBackupRestoreTest(unittest.TestCase):
                 path = root / f"{name}.key"
                 path.write_text(name, encoding="utf-8")
                 config["secrets"][name] = {"file": str(path)}
+            self.add_event_private_key(config, root)
             backup_directory = root / "backup"
             backup(config, backup_directory)
             config["secrets"][SECRET_NAMES[0]]["file"] = str(root / "different.key")
@@ -58,6 +71,8 @@ class SecretBackupRestoreTest(unittest.TestCase):
                 path.write_bytes(value)
                 old_values[name] = value
                 config["secrets"][name] = {"file": str(path)}
+            self.add_event_private_key(config, root)
+            old_values["event_release_public_key"] = Path(config["secrets"]["event_release_public_key"]["file"]).read_bytes()
             backup_directory = root / "backup"
             backup(config, backup_directory)
             (backup_directory / f"{SECRET_NAMES[-1]}.secret").unlink()
@@ -66,6 +81,33 @@ class SecretBackupRestoreTest(unittest.TestCase):
                 restore(config, backup_directory)
             for name, value in old_values.items():
                 self.assertEqual(Path(config["secrets"][name]["file"]).read_bytes(), value)
+
+    def test_backup_rejects_mismatched_event_key_pair(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = {"secrets": {}}
+            for name in SECRET_NAMES:
+                path = root / f"{name}.key"
+                path.write_bytes(b"value")
+                config["secrets"][name] = {"file": str(path)}
+            self.add_event_private_key(config, root)
+            Path(config["secrets"]["event_release_public_key"]["file"]).write_bytes(base64.b64encode(b"x" * 32))
+            with self.assertRaisesRegex(ValueError, "do not match"):
+                backup(config, root / "backup")
+
+    def test_backup_rejects_identical_update_and_event_keys(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = {"secrets": {}}
+            for name in SECRET_NAMES:
+                path = root / f"{name}.key"
+                path.write_bytes(b"value")
+                config["secrets"][name] = {"file": str(path)}
+            self.add_event_private_key(config, root)
+            event_public = Path(config["secrets"]["event_release_public_key"]["file"]).read_bytes()
+            Path(config["secrets"]["release_public_key"]["file"]).write_bytes(event_public)
+            with self.assertRaisesRegex(ValueError, "must be different"):
+                backup(config, root / "backup")
 
 
 if __name__ == "__main__":

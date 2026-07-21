@@ -16,7 +16,8 @@ type releaseAction struct {
 }
 
 type eventReleasePayload struct {
-	Artifacts []struct {
+	MinimumClientVersion string `json:"minimumClientVersion"`
+	Artifacts            []struct {
 		Digest string `json:"digest"`
 	} `json:"artifacts"`
 	Launchers []struct {
@@ -94,6 +95,15 @@ func ValidateEventReleaseSemantics(payload []byte) error {
 		if game.LauncherID != "standalone" {
 			if _, exists := launchers[game.LauncherID]; !exists {
 				return fmt.Errorf("game %s references missing launcher %s", game.GameID, game.LauncherID)
+			}
+		}
+		if game.LauncherID == "standalone" && len(game.Payloads) == 0 {
+			return fmt.Errorf("standalone game %s requires a LANReady payload", game.GameID)
+		}
+		if game.LauncherID != "standalone" && len(game.Payloads) == 0 {
+			comparison, versionErr := CompareSemanticVersions(release.MinimumClientVersion, "0.2.0")
+			if versionErr != nil || comparison < 0 {
+				return fmt.Errorf("provider-managed game %s requires minimum client version 0.2.0", game.GameID)
 			}
 		}
 		expectedAdapter, expectedTarget := launcherAdapters[game.LauncherID], launcherTargets[game.LauncherID]

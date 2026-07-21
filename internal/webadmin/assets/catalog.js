@@ -10,7 +10,7 @@
 	const cacheHelpers = window.LANReadyCatalogCache;
   const assignmentHelpers = window.LANReadyCatalogAssignments;
   const validTabs = ["games", "launchers", "launcher-versions", "game-versions", "events"];
-  const state = { data: null, tab: validTabs.includes(initialTab) ? initialTab : "games", selected: null, opener: null, dirty: false, busy: false, entityKey: "", deactivateKey: "", assignmentKey: "", releaseKey: "", releaseEnvelope: null, releasePayload: null, releaseStatus: null, updateKey: "", updateEnvelope: null, updatePayload: null, updateArtifactReady: false, cacheStatus: null, cacheMutationKeys: {}, cachePollTimer: 0, disabledControls: [] };
+  const state = { data: null, tab: validTabs.includes(initialTab) ? initialTab : "games", selected: null, opener: null, dirty: false, busy: false, entityKey: "", deactivateKey: "", assignmentKey: "", releaseKey: "", releaseStatus: null, releasePreflightToken: 0, updateKey: "", updateEnvelope: null, updatePayload: null, updateArtifactReady: false, cacheStatus: null, cacheMutationKeys: {}, cachePollTimer: 0, disabledControls: [] };
 
   const config = {
     games: {
@@ -92,6 +92,8 @@
     const details = [];
     const references = Number(error?.fieldErrors?.references || 0);
     if (references > 0) details.push(references + (references === 1 ? " abhängiger Eintrag" : " abhängige Einträge"));
+    const devices = Array.isArray(error?.fieldErrors?.devices) ? error.fieldErrors.devices : [];
+    if (devices.length) details.push("Betroffen: " + devices.join(", "));
     if (error?.requestId) details.push("Request-ID: " + error.requestId);
     return (error?.message || "Unbekannter Fehler.") + (details.length ? " · " + details.join(" · ") : "");
   }
@@ -212,6 +214,11 @@
     const date = new Date(value);
     if (Number.isNaN(date.valueOf())) return value;
     return new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  }
+
+  function localDateTimeValue(date) {
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
   }
 
   function statusForEvent(item) {
@@ -507,9 +514,9 @@
 
   function refreshAssignmentSelects() {
     if (!state.data || !byId("assignment-event") || !byId("assignment-version")) return;
-    const events = state.data.events.filter((entry) => entry.Status === "draft");
+    const events = state.data.events.filter((entry) => entry.Status !== "archived");
     const eventID = assignmentHelpers.retainedID(events, intValue("assignment-event"));
-    populateSelect(byId("assignment-event"), events, (entry) => entry.Name, eventID);
+    populateSelect(byId("assignment-event"), events, (entry) => entry.Name + (entry.Status === "published" ? " · veröffentlicht, nächste Sequenz" : ""), eventID);
     const versions = assignmentHelpers.availableVersions(state.data.gameVersions, state.data.eventGames, eventID);
     const versionID = assignmentHelpers.retainedID(versions, intValue("assignment-version"));
     populateSelect(byId("assignment-version"), versions, (entry) => entry.GameName + " · " + entry.Version, versionID);
@@ -894,12 +901,44 @@
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   }
 
-  function resetReleasePreview() {
-    state.releaseEnvelope = null;
-    state.releasePayload = null;
-    state.releaseKey = "";
-    byId("release-preview") && (byId("release-preview").hidden = true);
-    byId("publish-release") && (byId("publish-release").disabled = true);
+  async function refreshReleaseForm() {
+    if (!canPublish || !state.data || !byId("release-event")) return;
+    const events = state.data.events.filter((entry) => entry.Status !== "archived");
+    const selected = events.some((entry) => Number(entry.ID) === intValue("release-event")) ? intValue("release-event") : Number(events[0]?.ID || 0);
+    populateSelect(byId("release-event"), events, (entry) => entry.Name + " · " + entry.Status, selected);
+    const event = events.find((entry) => Number(entry.ID) === selected);
+    const issues = byId("release-issues");
+    issues.replaceChildren();
+    byId("release-summary").textContent = event ? "Zuordnungen werden serverseitig geprüft …" : "Lege zuerst ein Event an.";
+    const input = byId("release-valid-until-input");
+    if (input && !input.value) {
+      const eventEnd = Date.parse(event?.EndsAt || "");
+      const fallback = Date.now() + 30 * 24 * 60 * 60 * 1000;
+      input.value = localDateTimeValue(new Date(Number.isFinite(eventEnd) && eventEnd > Date.now() ? eventEnd + 7 * 24 * 60 * 60 * 1000 : fallback));
+    }
+    byId("publish-release").disabled = true;
+    renderReleaseStatus();
+    if (!event) return;
+    const token = ++state.releasePreflightToken;
+    try {
+      const result = await api("/admin/api/v1/releases/events/" + selected + "/preflight");
+      if (token !== state.releasePreflightToken || intValue("release-event") !== selected) return;
+      byId("release-summary").textContent = result.ready
+        ? result.gameCount + " Spielversion" + (result.gameCount === 1 ? "" : "en") + " über " + result.launcherCount + " Launcher geprüft · bereit zum Signieren"
+        : result.issues.length + " Problem" + (result.issues.length === 1 ? " blockiert" : "e blockieren") + " die Veröffentlichung";
+      for (const issue of result.issues) {
+        const item = document.createElement("li");
+        item.textContent = (issue.gameName ? issue.gameName + (issue.version ? " · " + issue.version : "") + ": " : "") + issue.message;
+        issues.append(item);
+      }
+      byId("publish-release").disabled = !result.ready || state.busy;
+    } catch (error) {
+      if (token !== state.releasePreflightToken) return;
+      byId("release-summary").textContent = "Veröffentlichungsprüfung fehlgeschlagen.";
+      const item = document.createElement("li");
+      item.textContent = errorText(error);
+      issues.append(item);
+    }
   }
 
   function renderReleaseStatus() {
@@ -916,11 +955,12 @@
     renderReleaseHistory();
     renderClientUpdateStatus();
     if (!canPublish || !byId("release-activate")) return;
-    const nextEvent = state.releasePayload?.eventId;
+    const selectedEvent = state.data?.events.find((entry) => Number(entry.ID) === intValue("release-event"));
+    const nextEvent = selectedEvent?.Slug;
     if (byId("release-activate").checked && nextEvent) {
       byId("release-activation-impact").textContent = active
-        ? "Aktivierung ersetzt für alle Clients „" + active.eventId + "“ Sequenz " + active.sequence + " durch „" + nextEvent + "“ Sequenz " + state.releasePayload.sequence + "."
-        : "Aktivierung liefert „" + nextEvent + "“ Sequenz " + state.releasePayload.sequence + " erstmals an alle Clients aus.";
+        ? "Aktivierung ersetzt für alle Clients „" + active.eventId + "“ Sequenz " + active.sequence + " durch das neue Release für „" + nextEvent + "“."
+        : "Aktivierung liefert das neue Release für „" + nextEvent + "“ erstmals an alle Clients aus.";
     } else {
       byId("release-activation-impact").textContent = "Ohne Aktivierung wird die Sequenz gespeichert, aber nicht an Clients ausgeliefert.";
     }
@@ -1102,7 +1142,7 @@
         const rollback = document.createElement("button");
         rollback.type = "button";
         rollback.className = "button";
-        rollback.textContent = "Rollback vorbereiten";
+        rollback.textContent = "Früheren Stand veröffentlichen";
         rollback.addEventListener("click", () => downloadRollbackCandidate(item, rollback));
         row.append(rollback);
       }
@@ -1122,22 +1162,15 @@
       byId("rollback-valid-until")?.focus();
       return;
     }
-    if (!window.confirm("Der Inhalt von „" + item.eventId + "“ #" + item.sequence + " wird als neue höhere Sequenz vorbereitet. Danach muss die JSON-Datei im Offline-Signer signiert und hier wieder hochgeladen werden. Fortfahren?")) return;
+    if (!window.confirm("Der Inhalt von „" + item.eventId + "“ #" + item.sequence + " wird automatisch als neue höhere Sequenz signiert, veröffentlicht und sofort an alle Clients ausgeliefert. Fortfahren?")) return;
     button.disabled = true;
     state.busy = true;
     showReleaseError("");
     try {
       setReleaseControlsBusy(true);
-      const result = await api("/admin/api/v1/releases/events/" + encodeURIComponent(item.eventId) + "/" + item.sequence + "/rollback-candidate", { method: "POST", body: { validUntil: new Date(validUntil).toISOString() } });
-      const blob = new Blob([JSON.stringify(result.payload, null, 2) + "\n"], { type: "application/json" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = item.eventId + "-rollback-seq-" + result.sequence + ".json";
-      document.body.append(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(link.href);
-      showPageMessage("Rollback-Kandidat für Sequenz " + result.sequence + " wurde erstellt. Signiere ihn offline mit lanready-release sign-event und lade das Envelope anschließend hier hoch.");
+      const result = await api("/admin/api/v1/releases/events/" + encodeURIComponent(item.eventId) + "/" + item.sequence + "/rollback-candidate", { method: "POST", headers: { "Idempotency-Key": newIdempotencyKey() }, body: { validUntil: new Date(validUntil).toISOString(), activate: true } });
+      await loadReleaseStatus();
+      showPageMessage("Der frühere Inhalt wurde als neue signierte Sequenz " + result.sequence + " veröffentlicht und an Clients ausgeliefert.");
     } catch (error) {
       showReleaseError(errorText(error));
     } finally {
@@ -1185,60 +1218,22 @@
 
   function setReleaseControlsBusy(busy) {
     byId("event-release")?.setAttribute("aria-busy", String(busy));
-    ["release-file", "release-activate", "rollback-valid-until"].forEach((id) => {
+    ["release-event", "release-valid-until-input", "release-minimum-client-input", "release-activate", "rollback-valid-until"].forEach((id) => {
       const element = byId(id);
       if (element) element.disabled = busy;
     });
-    if (byId("publish-release")) byId("publish-release").disabled = busy || !state.releaseEnvelope;
+    if (byId("publish-release")) byId("publish-release").disabled = busy;
     byId("release-history")?.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
-    if (byId("release-progress")) byId("release-progress").textContent = busy ? "Release-Aktion wird serverseitig geprüft …" : "";
-  }
-
-  async function readReleaseFile(event) {
-    resetReleasePreview();
-    showReleaseError("");
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (file.size > 950 * 1024) {
-      showReleaseError("Das Envelope überschreitet das Management-Limit von 950 KiB.");
-      return;
-    }
-    try {
-      const envelope = JSON.parse(await file.text());
-      if (envelope?.formatVersion !== 1 || envelope?.algorithm !== "Ed25519" || typeof envelope?.keyId !== "string" || typeof envelope?.signature !== "string") {
-        throw new Error("Die Datei ist kein vollständiges LANReady-Ed25519-Envelope.");
-      }
-      const payload = JSON.parse(decodeBase64URL(envelope.payload));
-      if (payload?.formatVersion !== 2 || typeof payload?.eventId !== "string" || !Number.isSafeInteger(payload?.sequence) || payload.sequence < 1 || !Array.isArray(payload?.games) || !Array.isArray(payload?.artifacts)) {
-        throw new Error("Der enthaltene Event-Payload besitzt nicht die erwartete Struktur.");
-      }
-      const knownEvent = state.data?.events?.find((item) => item.Slug === payload.eventId);
-      if (!knownEvent) throw new Error("Das signierte Event „" + payload.eventId + "“ existiert nicht im aktuellen Katalog.");
-      if (knownEvent.Status === "archived") throw new Error("Ein archiviertes Event kann nicht veröffentlicht werden.");
-      state.releaseEnvelope = envelope;
-      state.releasePayload = payload;
-      byId("release-event-id").textContent = payload.eventId;
-      byId("release-id").textContent = payload.releaseId || "—";
-      byId("release-sequence").textContent = String(payload.sequence);
-      byId("release-issued").textContent = formatDate(payload.issuedAt);
-      byId("release-valid-until").textContent = formatDate(payload.validUntil);
-      byId("release-minimum-client").textContent = payload.minimumClientVersion || "—";
-      byId("release-launchers").textContent = String(Array.isArray(payload.launchers) ? payload.launchers.length : 0);
-      byId("release-games").textContent = String(payload.games.length);
-      byId("release-artifacts").textContent = String(payload.artifacts.length);
-      byId("release-key-id").textContent = envelope.keyId;
-      byId("release-preview").hidden = false;
-      byId("publish-release").disabled = false;
-      renderReleaseStatus();
-    } catch (error) {
-      showReleaseError(error?.message || "Die Release-Datei konnte nicht gelesen werden.");
-    }
+    if (byId("release-progress")) byId("release-progress").textContent = busy ? "Release wird erstellt, im isolierten Signer signiert und vollständig geprüft …" : "";
   }
 
   async function publishRelease(event) {
     event.preventDefault();
-    if (!state.releaseEnvelope) {
-      showReleaseError("Bitte wähle zuerst ein gültig aufgebautes Release-Envelope.");
+    const eventID = intValue("release-event");
+    const minimumClientVersion = byId("release-minimum-client-input").value.trim();
+    const validUntil = Date.parse(byId("release-valid-until-input").value || "");
+    if (!eventID || !Number.isFinite(validUntil) || validUntil <= Date.now() || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(minimumClientVersion)) {
+      showReleaseError("Wähle ein Event, ein zukünftiges Gültigkeitsende und eine gültige LANReady-Version wie 0.2.0.");
       return;
     }
     const activate = byId("release-activate").checked;
@@ -1247,47 +1242,32 @@
       return;
     }
     if (activate) {
-      const issuedAt = Date.parse(state.releasePayload?.issuedAt || "");
-      const validUntil = Date.parse(state.releasePayload?.validUntil || "");
-      const now = Date.now();
-      if (!Number.isFinite(issuedAt) || !Number.isFinite(validUntil) || issuedAt > now || validUntil <= now) {
-        showReleaseError("Dieses Release ist derzeit nicht gültig und kann nicht aktiviert werden.");
-        return;
-      }
+      const selected = state.data.events.find((entry) => Number(entry.ID) === eventID);
       const active = state.releaseStatus.activeEvent;
       const change = active?.delivering
-        ? "„" + active.eventId + "“ Sequenz " + active.sequence + " wird für alle Clients durch „" + state.releasePayload.eventId + "“ Sequenz " + state.releasePayload.sequence + " ersetzt."
-        : "„" + state.releasePayload.eventId + "“ Sequenz " + state.releasePayload.sequence + " wird erstmals an alle Clients ausgeliefert.";
+        ? "„" + active.eventId + "“ Sequenz " + active.sequence + " wird für alle Clients durch „" + selected.Name + "“ ersetzt."
+        : "„" + selected.Name + "“ wird erstmals an alle Clients ausgeliefert.";
       if (!window.confirm(change + " Wirklich veröffentlichen und aktivieren?")) return;
     }
     const button = byId("publish-release");
     state.busy = true;
     button.disabled = true;
-    button.textContent = "Release wird geprüft …";
-    byId("release-file").disabled = true;
-    byId("release-activate").disabled = true;
-    byId("event-release").setAttribute("aria-busy", "true");
-    byId("release-progress").textContent = "Signatur, Sequenz und Artefakte werden serverseitig geprüft …";
+    button.textContent = "Release wird veröffentlicht …";
+    setReleaseControlsBusy(true);
     showReleaseError("");
     try {
       state.releaseKey = state.releaseKey || newIdempotencyKey();
-      const result = await api("/admin/api/v1/releases/events", { method: "POST", headers: { "Idempotency-Key": state.releaseKey }, body: { envelope: state.releaseEnvelope, activate } });
+      const result = await api("/admin/api/v1/releases/events/generate", { method: "POST", headers: { "Idempotency-Key": state.releaseKey }, body: { eventId: eventID, minimumClientVersion, validUntil: new Date(validUntil).toISOString(), activate } });
       state.releaseKey = "";
-      state.releaseEnvelope = null;
-      byId("release-form").reset();
-      resetReleasePreview();
       const refreshed = await load("Das Release wurde veröffentlicht, aber die Übersicht konnte nicht aktualisiert werden.");
-      if (refreshed) showPageMessage("Event „" + result.eventId + "“ wurde als unveränderliche Sequenz " + result.sequence + (result.active ? " veröffentlicht und aktiviert." : " veröffentlicht."));
+      if (refreshed) showPageMessage("Event „" + result.eventId + "“ wurde mit " + result.gameCount + " Spielen als signierte Sequenz " + result.sequence + (result.active ? " veröffentlicht und an Clients ausgeliefert." : " veröffentlicht."));
     } catch (error) {
       showReleaseError(errorText(error));
     } finally {
-      byId("release-file").disabled = false;
-      byId("release-activate").disabled = false;
-      byId("event-release").setAttribute("aria-busy", "false");
-      byId("release-progress").textContent = "";
-      button.textContent = "Prüfen und veröffentlichen";
-      button.disabled = !state.releaseEnvelope;
       state.busy = false;
+      setReleaseControlsBusy(false);
+      button.textContent = "Release erstellen, signieren und veröffentlichen";
+      refreshReleaseForm();
     }
   }
 
@@ -1332,6 +1312,7 @@
       state.data = normalizeSnapshot(await api("/admin/api/v1/catalog"));
       await Promise.all([loadReleaseStatus(), loadCacheStatus()]);
       refreshSelects(state.selected || {});
+      refreshReleaseForm();
       render();
 	  scheduleCachePoll();
       return true;
@@ -1408,8 +1389,10 @@
   byId("assignment-form")?.addEventListener("input", () => { state.assignmentKey = ""; });
   byId("assignment-form")?.addEventListener("change", () => { state.assignmentKey = ""; });
   if (canPublish) {
-    byId("release-file")?.addEventListener("change", readReleaseFile);
     byId("release-form")?.addEventListener("submit", publishRelease);
+    byId("release-event")?.addEventListener("change", () => { state.releaseKey = ""; refreshReleaseForm(); });
+    byId("release-valid-until-input")?.addEventListener("input", () => { state.releaseKey = ""; });
+    byId("release-minimum-client-input")?.addEventListener("input", () => { state.releaseKey = ""; });
     byId("release-activate")?.addEventListener("change", renderReleaseStatus);
     byId("client-update-file")?.addEventListener("change", readClientUpdateFile);
 	byId("client-update-artifact-file")?.addEventListener("change", () => { byId("upload-client-update-artifact").disabled = !state.updatePayload || !byId("client-update-artifact-file").files?.[0] || state.updateArtifactReady; });

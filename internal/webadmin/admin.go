@@ -83,8 +83,9 @@ func New(st *store.Store, secureCookies bool, vault *secretbox.Box, options ...O
 	a.mux.HandleFunc("POST /admin/api/v1/sources/{id}/deactivate", a.apiRoute(a.idempotentPost("POST /admin/api/v1/sources/{id}/deactivate", a.deactivateSourceAPI)))
 	a.mux.HandleFunc("DELETE /admin/api/v1/sources/{id}", a.apiRoute(a.deleteSourceAPI))
 	a.mux.HandleFunc("POST /admin/api/v1/releases/events", a.apiRoute(a.idempotentPost("POST /admin/api/v1/releases/events", a.publishEventReleaseAPI)))
+	a.mux.HandleFunc("POST /admin/api/v1/releases/events/generate", a.apiRoute(a.idempotentPost("POST /admin/api/v1/releases/events/generate", a.generateEventReleaseAPI)))
 	a.mux.HandleFunc("POST /admin/api/v1/releases/events/{eventID}/{sequence}/activate", a.apiRoute(a.idempotentPost("POST /admin/api/v1/releases/events/{eventID}/{sequence}/activate", a.activateEventReleaseAPI)))
-	a.mux.HandleFunc("POST /admin/api/v1/releases/events/{eventID}/{sequence}/rollback-candidate", a.apiRoute(a.buildRollbackCandidateAPI))
+	a.mux.HandleFunc("POST /admin/api/v1/releases/events/{eventID}/{sequence}/rollback-candidate", a.apiRoute(a.idempotentPost("POST /admin/api/v1/releases/events/{eventID}/{sequence}/rollback-candidate", a.buildRollbackCandidateAPI)))
 	a.mux.HandleFunc("POST /admin/api/v1/releases/client-updates", a.apiRoute(a.idempotentPost("POST /admin/api/v1/releases/client-updates", a.publishClientUpdateReleaseAPI)))
 	a.mux.HandleFunc("GET /admin/api/v1/artifacts/client-update/{digest}", a.apiRoute(a.clientUpdateArtifactStatusAPI))
 	a.mux.HandleFunc("POST /admin/api/v1/artifacts/client-update/{digest}", a.apiRoute(a.uploadClientUpdateArtifactAPI))
@@ -95,6 +96,7 @@ func New(st *store.Store, secureCookies bool, vault *secretbox.Box, options ...O
 	a.mux.HandleFunc("GET /admin/api/v1/cache-status", a.apiRoute(a.cacheStatusAPI))
 	a.mux.HandleFunc("POST /admin/api/v1/cache-gc", a.apiRoute(a.idempotentPost("POST /admin/api/v1/cache-gc", a.garbageCollectCacheAPI)))
 	a.mux.HandleFunc("GET /admin/api/v1/releases/status", a.apiRoute(a.releaseStatusAPI))
+	a.mux.HandleFunc("GET /admin/api/v1/releases/events/{eventID}/preflight", a.apiRoute(a.eventReleasePreflightAPI))
 	return a
 }
 func (a *Admin) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }

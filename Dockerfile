@@ -42,6 +42,7 @@ RUN go test ./...
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/lanready-server ./cmd/lanready-server \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/lanready-manifest ./cmd/lanready-manifest \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/lanready-release ./cmd/lanready-release \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/lanready-signer ./cmd/lanready-signer \
     && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/LANReady.exe ./cmd/lanready
 
 # Export binaries without requiring Go on the host:
@@ -75,3 +76,13 @@ ENV LANREADY_RELEASE_SCHEMA_DIR=/usr/share/lanready/schemas
 WORKDIR /work
 USER 10001:10001
 ENTRYPOINT ["lanready-release"]
+
+FROM alpine:3.24.1 AS signer-service
+RUN addgroup -g 10001 -S lanready && adduser -u 10001 -S -G lanready lanready
+COPY --from=build /out/lanready-signer /usr/local/bin/lanready-signer
+COPY --from=build /src/docs/contracts/schemas/ /usr/share/lanready/schemas/
+ENV LANREADY_RELEASE_SCHEMA_DIR=/usr/share/lanready/schemas \
+    LANREADY_SIGNER_SOCKET=/run/lanready-signer/signer.sock \
+    LANREADY_RELEASE_PRIVATE_KEY_FILE=/run/secrets/event_release_private_key
+USER 10001:10001
+ENTRYPOINT ["lanready-signer"]
