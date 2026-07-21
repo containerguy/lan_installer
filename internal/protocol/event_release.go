@@ -18,7 +18,9 @@ type releaseAction struct {
 type eventReleasePayload struct {
 	MinimumClientVersion string `json:"minimumClientVersion"`
 	Artifacts            []struct {
-		Digest string `json:"digest"`
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
 	} `json:"artifacts"`
 	Launchers []struct {
 		LauncherID string          `json:"launcherId"`
@@ -26,6 +28,7 @@ type eventReleasePayload struct {
 	} `json:"launchers"`
 	Games []struct {
 		GameID     string `json:"gameId"`
+		Name       string `json:"name"`
 		LauncherID string `json:"launcherId"`
 		Payloads   []struct {
 			Type      string          `json:"type"`

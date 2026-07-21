@@ -37,7 +37,7 @@ var errUnsafeInstall = errors.New("install target is unsafe")
 // before a single entry is read, so a corrupted or substituted download never
 // reaches the extractor. Extraction itself is contained by [Extract].
 func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveInstall, gamesRoot string, limits Limits) (string, error) {
-	target, err := resolveInstallDir(gamesRoot, spec.RelativePath)
+	target, err := ResolveInstallDir(gamesRoot, spec.RelativePath)
 	if err != nil {
 		return "", err
 	}
@@ -103,10 +103,10 @@ func verifyFile(path, digest string, size int64) error {
 	return nil
 }
 
-// resolveInstallDir applies the same containment rule to the release-supplied
+// ResolveInstallDir applies the same containment rule to the release-supplied
 // relative path as the extractor applies to archive entries. The server already
 // restricts it, but the client is the last line of defence.
-func resolveInstallDir(gamesRoot, relativePath string) (string, error) {
+func ResolveInstallDir(gamesRoot, relativePath string) (string, error) {
 	root, err := filepath.Abs(gamesRoot)
 	if err != nil {
 		return "", err
