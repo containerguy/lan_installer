@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="standalone.css">
   <link rel="stylesheet" href="accessibility.css">
   <script defer src="readiness.js"></script>
+  <script defer src="installs.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -63,6 +64,16 @@
           </div>
           <p id="event-readiness-message">Ein Katalogeintrag allein verändert die Event-Bereitschaft nicht. Ein Event muss veröffentlicht und ausdrücklich aktiviert werden.</p>
           <div id="event-readiness-components" class="event-readiness-components hidden" aria-label="Event-Komponenten"></div>
+        </article>
+
+        <article id="install-panel" class="panel install-panel hidden" aria-labelledby="install-title">
+          <div class="event-readiness-heading">
+            <div><p class="eyebrow">VOM EVENT BEREITGESTELLT</p><h3 id="install-title">Spiele über LANReady installieren</h3></div>
+            <span id="install-badge" class="readiness-badge">—</span>
+          </div>
+          <p id="install-message">Installationsstand wird geladen …</p>
+          <ul id="install-list" class="install-list" aria-label="Bereitgestellte Spiele"></ul>
+          <div id="install-error" class="form-error hidden" role="alert"></div>
         </article>
 
         <div class="stats-grid">
@@ -159,6 +170,16 @@
         <button id="manual-game-save" class="button button-primary button-full" type="submit">Geschützt hinzufügen</button>
       </form>
       <p class="modal-note">LANReady speichert den Pfad im DPAPI-geschützten Benutzerprofil. Die Windows-Dateiversion wird nur verwendet, wenn sie in der EXE vorhanden ist.</p>
+    </section>
+
+    <section id="install-pick-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="install-pick-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">INSTALLATION ABGESCHLOSSEN</p><h2 id="install-pick-title">Hauptprogramm auswählen</h2><p id="install-pick-intro">Die Dateien wurden entpackt. Wähle das Hauptprogramm des Spiels aus, damit LANReady die Version erkennen kann.</p>
+      <form id="install-pick-form">
+        <label>Gefundene Programme<select id="install-pick-select" required></select></label>
+        <div id="install-pick-error" class="form-error hidden" role="alert"></div>
+        <button id="install-pick-save" class="button button-primary button-full" type="submit">Als Hauptprogramm übernehmen</button>
+      </form>
+      <p class="modal-note">Der erste Eintrag ist nur ein Vorschlag. LANReady wählt bewusst nicht selbst aus, weil ein falsches Programm die erkannte Version verfälschen würde.</p>
     </section>
   </div>
 

@@ -104,3 +104,17 @@
   .event-readiness-components { grid-template-columns: 1fr; }
   .event-readiness-heading { align-items: center; }
 }
+
+/* Vom Event bereitgestellte Spiele */
+.install-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.install-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 14px; border: 1px solid var(--border, rgba(255,255,255,0.12));
+  border-radius: 10px; background: var(--surface-2, rgba(255,255,255,0.03));
+}
+.install-row small { opacity: 0.75; word-break: break-all; }
+.install-row button { flex: 0 0 auto; }
+.install-row button:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 640px) {
+  .install-row { flex-direction: column; align-items: stretch; }
+}

@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null, standaloneCatalog: [] };
+const state = { installs: null, installsError: "", installPick: null, connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null, standaloneCatalog: [] };
 let modalReturnFocus = null;
 const $ = (id) => document.getElementById(id);
 const api = (name, ...args) => {
@@ -23,6 +23,7 @@ function bindEvents() {
   $("manual-game-button").addEventListener("click", openManualGame);
   $("manual-game-browse").addEventListener("click", chooseManualExecutable);
   $("manual-game-form").addEventListener("submit", saveManualGame);
+  $("install-pick-form").addEventListener("submit", saveInstalledExecutable);
   $("select-all-button").addEventListener("click", () => { state.selected = new Set((state.discovery?.installations || []).map((_, index) => index)); renderGames(); });
   $("clear-selection-button").addEventListener("click", () => { state.selected.clear(); renderGames(); });
   $("games-retry").addEventListener("click", discover);
@@ -51,6 +52,7 @@ async function loadState() {
     renderConnection();
     renderGames();
     renderStats();
+    refreshInstalls();
     if (state.connection?.serverWarning) setPersistentError("global", state.connection.serverWarning);
   }
   catch (error) { state.connection = null; setPersistentError("global", errorText(error) + " Das lokale Geräteprofil bleibt unverändert; versuche es erneut."); }
@@ -494,3 +496,99 @@ function setError(id, message) { const box = $(id); box.textContent = message; b
 function setPersistentError(scope, message) { $(scope + "-error-text").textContent = message; $(scope + "-error").classList.toggle("hidden", !message); }
 function showToast(message, failure = false) { const toast = $("toast"); toast.textContent = message; toast.setAttribute("role", failure ? "alert" : "status"); toast.style.borderColor = failure ? "rgba(255,111,127,.3)" : ""; toast.style.background = failure ? "#301a25" : ""; toast.classList.remove("hidden"); setTimeout(() => toast.classList.add("hidden"), 5000); }
 function launcherName(value) { return ({steam:"Steam", ea_app:"EA App", ubisoft_connect:"Ubisoft Connect", standalone:"Ohne Launcher"})[value] || value; }
+
+
+// --- Vom Event bereitgestellte Spiele -------------------------------------
+
+// refreshInstalls is fire-and-forget: the install panel must never delay or
+// break the main state render if the event cannot be read.
+async function refreshInstalls() {
+  if (!connectionUsable()) { state.installs = null; state.installsError = ""; renderInstalls(); return; }
+  try { state.installs = await api("PendingInstalls"); state.installsError = ""; }
+  catch (error) { state.installs = null; state.installsError = errorText(error); }
+  renderInstalls();
+}
+
+function renderInstalls() {
+  const panel = $("install-panel");
+  if (!panel) return;
+  const model = window.LANReadyInstalls.viewModel(state.installs, state.installsError);
+  // An event without LANReady-delivered games must not show an empty panel.
+  panel.classList.toggle("hidden", model.state === "none" || model.state === "unavailable");
+  $("install-badge").textContent = model.state === "complete" ? "Vollständig" : model.state === "error" ? "Nicht verfügbar" : `${model.pendingCount} offen`;
+  $("install-message").textContent = model.message;
+  setError("install-error", model.state === "error" ? model.message : "");
+  const list = $("install-list");
+  list.replaceChildren(...model.items.map((item) => {
+    const row = document.createElement("li");
+    row.className = "install-row";
+    const text = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = item.name;
+    const meta = document.createElement("small");
+    meta.textContent = item.installed ? `${item.sizeLabel} · installiert in ${item.targetDir}` : `${item.sizeLabel} · noch nicht installiert`;
+    text.append(name, document.createElement("br"), meta);
+    const action = document.createElement("button");
+    action.className = "button button-ghost";
+    action.textContent = item.installed ? "Installiert" : "Installieren";
+    action.disabled = item.installed;
+    if (!item.installed) action.addEventListener("click", () => installGame(item, action));
+    row.append(text, action);
+    return row;
+  }));
+}
+
+async function installGame(item, button) {
+  // Multi-gigabyte downloads always need an explicit yes that names the size
+  // and the target directory.
+  if (!window.confirm(window.LANReadyInstalls.confirmText(item))) return;
+  setBusy(button, true, "Wird geladen …");
+  setError("install-error", "");
+  try {
+    const result = await api("InstallGame", item.gameId);
+    await refreshInstalls();
+    openInstallPicker(item, result);
+  }
+  catch (error) { setError("install-error", errorText(error)); }
+  finally { setBusy(button, false, "Installieren"); }
+}
+
+function openInstallPicker(item, result) {
+  const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+  state.installPick = { gameId: item.gameId, name: item.name, candidates };
+  const select = $("install-pick-select");
+  select.replaceChildren(...candidates.map((candidate) => {
+    const option = document.createElement("option");
+    option.value = candidate.absolutePath;
+    option.textContent = window.LANReadyInstalls.candidateLabel(candidate);
+    return option;
+  }));
+  $("install-pick-intro").textContent = candidates.length === 0
+    ? `${item.name} wurde nach ${result?.targetDir || "das Zielverzeichnis"} entpackt, es wurde aber keine EXE gefunden. Registriere das Hauptprogramm über „Spiel manuell hinzufügen“.`
+    : `${item.name} wurde entpackt. Wähle das Hauptprogramm aus, damit LANReady die Version erkennen kann.`;
+  $("install-pick-save").disabled = candidates.length === 0;
+  setError("install-pick-error", "");
+  openModal("install-pick-modal");
+}
+
+async function saveInstalledExecutable(event) {
+  event.preventDefault();
+  const pick = state.installPick;
+  const executablePath = $("install-pick-select").value;
+  if (!pick || !executablePath) { setError("install-pick-error", "Bitte wähle das Hauptprogramm aus."); return; }
+  const button = $("install-pick-save");
+  setBusy(button, true, "Wird geschützt gespeichert …");
+  setError("install-pick-error", "");
+  try {
+    const catalog = await api("StandaloneCatalog");
+    const match = (catalog || []).find((game) => game.externalGameId === pick.gameId);
+    if (!match) throw new Error("Dieses Spiel ist im aktuellen Standalone-Katalog nicht mehr verfügbar.");
+    await api("SaveManualGame", { catalogGameId: match.id, executablePath });
+    closeModal();
+    state.installPick = null;
+    await discover();
+    showToast(`${pick.name} wurde registriert.`);
+  }
+  catch (error) { setError("install-pick-error", errorText(error)); }
+  finally { setBusy(button, false, "Als Hauptprogramm übernehmen"); }
+}

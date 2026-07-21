@@ -24,9 +24,11 @@ web-test:
 	node --check internal/webadmin/assets/sources.js
 	node --check cmd/lanready-gui/frontend/dist/app.js
 	node --check cmd/lanready-gui/frontend/dist/readiness.js
+	node --check cmd/lanready-gui/frontend/dist/installs.js
 	node --test internal/webadmin/assets/catalog_cache_helpers.test.js
 	node --test internal/webadmin/assets/catalog_assignment_helpers.test.js
 	node --test cmd/lanready-gui/frontend/dist/readiness.test.js
+	node --test cmd/lanready-gui/frontend/dist/installs.test.js
 	node --test cmd/lanready-gui/frontend/dist/frontend_contract.test.js
 
 vet:
