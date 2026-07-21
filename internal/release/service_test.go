@@ -94,14 +94,38 @@ func TestServicePublishesOnlyTrustedValidatedRelease(t *testing.T) {
 	if _, err = service.PublishClientUpdate(ctx, updateRaw, &store.AuditEntry{ActorUserID: 1, Action: "publish_client_update_release"}); err != nil {
 		t.Fatalf("publish compatible update: %v", err)
 	}
-	unsupportedPayload := []byte(strings.NewReplacer("ISSUED", now.Add(-time.Hour).Format(time.RFC3339), "VALID", now.Add(48*time.Hour).Format(time.RFC3339)).Replace(`{"formatVersion":2,"eventId":"kellerlan-2026","releaseId":"01K0LANREADY00000000000999","sequence":1,"issuedAt":"ISSUED","validUntil":"VALID","minimumClientVersion":"0.2.0","artifacts":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":42,"mediaType":"application/zip","fileName":"game.zip"}],"launchers":[],"games":[{"gameId":"standalone-game","name":"Standalone Game","launcherId":"standalone","externalGameId":"standalone-game","version":"1","required":true,"payloads":[{"type":"archive","artifacts":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"actions":[{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","targetRoot":"user_games","relativePath":"Standalone Game"}]}]}]}`))
-	unsupportedEnvelope, err := protocol.SignEnvelope(unsupportedPayload, privateKey)
+	// Only archive extraction below the user games root is executable today.
+	// Every other action shape must stay out of a signed release, whatever the
+	// signer was willing to sign.
+	prefixedDigest := "sha256:" + digest
+	for name, action := range map[string]string{
+		"materialize_tree":      `{"adapter":"lanready_tree","operation":"materialize_tree","artifactDigest":"DIGEST","targetRoot":"user_games","relativePath":"game"}`,
+		"import_library":        `{"adapter":"steam","operation":"import_library","artifactDigest":"DIGEST","targetRoot":"steam_library","relativePath":"game"}`,
+		"extract_outside_games": `{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"DIGEST","targetRoot":"steam_library","relativePath":"game"}`,
+		"extract_to_temp":       `{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"DIGEST","targetRoot":"temp","relativePath":"game"}`,
+	} {
+		body := strings.NewReplacer("ISSUED", now.Add(-time.Hour).Format(time.RFC3339), "VALID", now.Add(48*time.Hour).Format(time.RFC3339), "ACTION", strings.ReplaceAll(action, "DIGEST", prefixedDigest), "DIGEST", prefixedDigest).Replace(`{"formatVersion":2,"eventId":"kellerlan-2026","releaseId":"01K0LANREADY00000000000999","sequence":1,"issuedAt":"ISSUED","validUntil":"VALID","minimumClientVersion":"0.2.0","artifacts":[{"digest":"DIGEST","size":42,"mediaType":"application/zip","fileName":"game.zip"}],"launchers":[],"games":[{"gameId":"standalone-game","name":"Standalone Game","launcherId":"standalone","externalGameId":"standalone-game","version":"1","required":true,"payloads":[{"type":"archive","artifacts":["DIGEST"],"actions":[ACTION]}]}]}`)
+		unsupportedEnvelope, signErr := protocol.SignEnvelope([]byte(body), privateKey)
+		if signErr != nil {
+			t.Fatalf("%s: %v", name, signErr)
+		}
+		unsupportedRaw, _ := json.Marshal(unsupportedEnvelope)
+		// Rejection may come from the schema/semantics layer or from the
+		// capability gate depending on the shape; what matters is that no such
+		// action can ever reach a stored, signed release.
+		if _, err = service.PublishEvent(ctx, unsupportedRaw, false, &store.AuditEntry{ActorUserID: 1, Action: "publish_event_release"}); err == nil {
+			t.Fatalf("%s bypassed central client capability policy", name)
+		}
+	}
+	// A launcher-managed game must never carry a LANReady payload.
+	launcherPayloadBody := strings.NewReplacer("ISSUED", now.Add(-time.Hour).Format(time.RFC3339), "VALID", now.Add(48*time.Hour).Format(time.RFC3339), "DIGEST", prefixedDigest).Replace(`{"formatVersion":2,"eventId":"kellerlan-2026","releaseId":"01K0LANREADY00000000000998","sequence":1,"issuedAt":"ISSUED","validUntil":"VALID","minimumClientVersion":"0.2.0","artifacts":[{"digest":"DIGEST","size":42,"mediaType":"application/zip","fileName":"game.zip"}],"launchers":[{"launcherId":"steam","version":"current","required":true,"actions":[{"adapter":"steam","operation":"detect"}]}],"games":[{"gameId":"cs2","name":"Counter-Strike 2","launcherId":"steam","externalGameId":"730","version":"1","required":true,"payloads":[{"type":"archive","artifacts":["DIGEST"],"actions":[{"adapter":"lanready_archive","operation":"extract_archive","artifactDigest":"DIGEST","targetRoot":"user_games","relativePath":"cs2"}]}]}]}`)
+	launcherPayloadEnvelope, err := protocol.SignEnvelope([]byte(launcherPayloadBody), privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupportedRaw, _ := json.Marshal(unsupportedEnvelope)
-	if _, err = service.PublishEvent(ctx, unsupportedRaw, false, &store.AuditEntry{ActorUserID: 1, Action: "publish_event_release"}); !errors.Is(err, ErrEventActionsUnsupported) {
-		t.Fatalf("package event bypassed central client capability policy: %v", err)
+	launcherPayloadRaw, _ := json.Marshal(launcherPayloadEnvelope)
+	if _, err = service.PublishEvent(ctx, launcherPayloadRaw, false, &store.AuditEntry{ActorUserID: 1, Action: "publish_event_release"}); err == nil {
+		t.Fatal("launcher game with payload bypassed capability policy")
 	}
 	envelope, err := protocol.SignEnvelope(payload, updatePrivateKey)
 	if err != nil {
@@ -363,5 +387,141 @@ func TestActivateWithoutStableUpdateWhenAllClientsAreCurrent(t *testing.T) {
 	active, err := st.ActiveEventRelease(ctx)
 	if err != nil || active.Sequence != result.Sequence {
 		t.Fatalf("release was not activated: seq=%d err=%v", active.Sequence, err)
+	}
+}
+
+// The standalone install path is the first one where a signed release makes the
+// client execute something, so prove the generated payload is exactly the
+// narrow shape the capability gate admits.
+func TestGenerateAndPublishStandaloneArchiveEvent(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/standalone.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err = st.BootstrapAdmin(ctx, "admin", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	launchers, err := st.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var standaloneID int64
+	for _, launcher := range launchers {
+		if launcher.Adapter == "standalone" {
+			standaloneID = launcher.ID
+		}
+	}
+	if standaloneID == 0 {
+		t.Fatal("standalone launcher missing")
+	}
+	source, err := st.SaveSourceAtomic(ctx, store.Source{Name: "Pakete", Kind: "https", BaseURL: "https://packages.example.test", Enabled: true}, 0, func(int64, *store.WebDAVConfig) (*store.WebDAVConfig, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := source.ID
+	digest := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	if err = st.RegisterArtifact(ctx, store.Artifact{Digest: digest, SizeBytes: 4096, ContentType: "application/zip"}); err != nil {
+		t.Fatal(err)
+	}
+	gameID, err := st.SaveGameAtomic(ctx, store.Game{Slug: "flatout2", Name: "FlatOut 2", LauncherID: standaloneID, ExternalGameID: "flatout2", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := st.SaveGameVersionAtomic(ctx, store.GameVersion{GameID: gameID, Version: "V1", SourceID: sourceID, SourcePath: "sub/dir/FlatOut2.zip", SHA256: digest, SizeBytes: 4096, Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventID, err := st.SaveEventAtomic(ctx, store.Event{Slug: "lan-2026", Name: "LAN 2026", Status: "draft"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SaveEventGameAtomic(ctx, store.EventGame{EventID: eventID, GameVersionID: versionID, Required: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	schemaDir, err := filepath.Abs("../../docs/contracts/schemas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := protocol.NewReleaseValidator(schemaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatePublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewWithPurposeKeyrings(st, validator, map[string]ed25519.PublicKey{protocol.KeyID(publicKey): publicKey}, map[string]ed25519.PublicKey{protocol.KeyID(updatePublicKey): updatePublicKey}, acceptingArtifactVerifier{}, "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.SetEventSigner(testEventSigner{key: privateKey}, protocol.KeyID(publicKey)); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := service.PreflightEvent(ctx, eventID)
+	if err != nil || !preflight.Ready {
+		t.Fatalf("cached standalone package is not publishable: %#v err=%v", preflight.Issues, err)
+	}
+	result, err := service.GenerateAndPublishEvent(ctx, eventID, "0.2.0", time.Now().UTC().Add(24*time.Hour), false, &store.AuditEntry{ActorUserID: 1, Action: "generate_publish_event_release"})
+	if err != nil {
+		t.Fatalf("generate standalone release: %v", err)
+	}
+	stored, err := st.EventReleaseSequence(ctx, result.EventID, result.Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, metadata, err := validator.ValidateEventEnvelope(stored.EnvelopeJSON, map[string]ed25519.PublicKey{protocol.KeyID(publicKey): publicKey})
+	if err != nil {
+		t.Fatalf("stored standalone release is invalid: %v", err)
+	}
+	if len(metadata.Artifacts) != 1 || metadata.Artifacts[0].Digest != "sha256:"+digest || metadata.Artifacts[0].Size != 4096 {
+		t.Fatalf("artifact metadata: %#v", metadata.Artifacts)
+	}
+	var decoded struct {
+		Launchers []any `json:"launchers"`
+		Artifacts []struct {
+			FileName  string `json:"fileName"`
+			MediaType string `json:"mediaType"`
+		} `json:"artifacts"`
+		Games []struct {
+			LauncherID string `json:"launcherId"`
+			Payloads   []struct {
+				Type    string `json:"type"`
+				Actions []struct {
+					Adapter      string `json:"adapter"`
+					Operation    string `json:"operation"`
+					TargetRoot   string `json:"targetRoot"`
+					RelativePath string `json:"relativePath"`
+				} `json:"actions"`
+			} `json:"payloads"`
+		} `json:"games"`
+	}
+	if err = json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	// A standalone game needs no launcher entry: there is nothing to detect.
+	if len(decoded.Launchers) != 0 {
+		t.Fatalf("standalone release declared launchers: %s", payload)
+	}
+	// The source path is reduced to a bare file name; separators would violate
+	// the release schema and could escape the extraction directory.
+	if decoded.Artifacts[0].FileName != "FlatOut2.zip" || decoded.Artifacts[0].MediaType != "application/zip" {
+		t.Fatalf("artifact file name: %#v", decoded.Artifacts[0])
+	}
+	if len(decoded.Games) != 1 || decoded.Games[0].LauncherID != "standalone" || len(decoded.Games[0].Payloads) != 1 {
+		t.Fatalf("games: %s", payload)
+	}
+	archive := decoded.Games[0].Payloads[0]
+	if archive.Type != "archive" || len(archive.Actions) != 1 {
+		t.Fatalf("payload: %#v", archive)
+	}
+	action := archive.Actions[0]
+	if action.Adapter != "lanready_archive" || action.Operation != "extract_archive" || action.TargetRoot != "user_games" || action.RelativePath != "flatout2" {
+		t.Fatalf("action: %#v", action)
 	}
 }

@@ -261,8 +261,20 @@ func (s *Service) PreflightEvent(ctx context.Context, eventID int64) (EventPrefl
 			issue("launcher_disabled", "Der Launcher ist deaktiviert.")
 		case strings.TrimSpace(game.ExternalGameID) == "":
 			issue("external_id_missing", "Die externe Spiel-ID fehlt.")
-		case game.SourceID != 0 || game.LauncherAdapter == "standalone":
-			issue("client_installation_missing", "LANReady kann dieses Paket im Windows-Client noch nicht sicher installieren. Entferne die Zuordnung vorläufig oder veröffentliche sie erst nach dem Installations-Slice.")
+		case game.LauncherAdapter == "standalone":
+			// Standalone games are delivered as one LANReady archive. The bytes
+			// must already be verified in the CAS, otherwise the client would
+			// receive a signed promise it cannot fulfil.
+			switch {
+			case game.SourceID == 0 || strings.TrimSpace(game.SHA256) == "" || game.SizeBytes <= 0:
+				issue("package_missing", "Für dieses Spiel ohne Launcher ist noch kein LANReady-Paket hinterlegt.")
+			case strings.TrimSpace(game.ArtifactContentType) == "":
+				issue("package_not_cached", "Das Paket liegt noch nicht geprüft im Cache. Starte den Download in der Katalogansicht und warte, bis er abgeschlossen ist.")
+			case !archiveMediaTypes[game.ArtifactContentType]:
+				issue("package_not_archive", "Nur ZIP-Archive können derzeit installiert werden. Hinterlegtes Format: "+game.ArtifactContentType+".")
+			}
+		case game.SourceID != 0:
+			issue("client_installation_missing", "LANReady kann ein Paket für dieses Launcher-Spiel im Windows-Client noch nicht sicher installieren. Entferne die Zuordnung vorläufig oder veröffentliche sie erst nach dem Installations-Slice.")
 		default:
 			launcherID, _ := releaseLauncher(game.LauncherAdapter)
 			if launcherID == "" {
@@ -314,14 +326,22 @@ func (s *Service) GenerateAndPublishEvent(ctx context.Context, eventID int64, mi
 		return result, err
 	}
 	type action struct {
-		Adapter   string `json:"adapter"`
-		Operation string `json:"operation"`
+		Adapter        string `json:"adapter"`
+		Operation      string `json:"operation"`
+		ArtifactDigest string `json:"artifactDigest,omitempty"`
+		TargetRoot     string `json:"targetRoot,omitempty"`
+		RelativePath   string `json:"relativePath,omitempty"`
 	}
 	type launcherRelease struct {
 		LauncherID string   `json:"launcherId"`
 		Version    string   `json:"version"`
 		Required   bool     `json:"required"`
 		Actions    []action `json:"actions"`
+	}
+	type payloadRelease struct {
+		Type      string   `json:"type"`
+		Artifacts []string `json:"artifacts"`
+		Actions   []action `json:"actions"`
 	}
 	type gameRelease struct {
 		GameID         string `json:"gameId"`
@@ -332,11 +352,42 @@ func (s *Service) GenerateAndPublishEvent(ctx context.Context, eventID int64, mi
 		Required       bool   `json:"required"`
 		Payloads       []any  `json:"payloads"`
 	}
+	type artifactRelease struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+		FileName  string `json:"fileName"`
+	}
 	launcherByID := map[string]*launcherRelease{}
 	releaseGames := make([]gameRelease, 0, len(games))
+	releaseArtifacts := make([]artifactRelease, 0)
+	seenArtifacts := map[string]struct{}{}
 	for _, game := range games {
 		if game.EventID != eventID || game.EventSlug != event.EventSlug || !game.GameEnabled || !game.VersionEnabled || !game.LauncherEnabled || strings.TrimSpace(game.ExternalGameID) == "" {
 			return result, ErrEventCatalogInvalid
+		}
+		if game.LauncherAdapter == "standalone" {
+			// One verified archive per standalone game, extracted below the
+			// user games root into a directory named after the immutable game
+			// slug. The slug pattern already excludes separators and traversal.
+			if game.SourceID == 0 || strings.TrimSpace(game.SHA256) == "" || game.SizeBytes <= 0 || !archiveMediaTypes[game.ArtifactContentType] {
+				return result, ErrEventPackageUnsupported
+			}
+			digest := "sha256:" + game.SHA256
+			if _, duplicate := seenArtifacts[digest]; !duplicate {
+				seenArtifacts[digest] = struct{}{}
+				releaseArtifacts = append(releaseArtifacts, artifactRelease{Digest: digest, Size: game.SizeBytes, MediaType: game.ArtifactContentType, FileName: archiveFileName(game.SourcePath, game.GameSlug)})
+			}
+			releaseGames = append(releaseGames, gameRelease{
+				GameID: game.GameSlug, Name: game.GameName, LauncherID: "standalone",
+				ExternalGameID: game.ExternalGameID, Version: game.Version, Required: game.Required,
+				Payloads: []any{payloadRelease{
+					Type:      "archive",
+					Artifacts: []string{digest},
+					Actions:   []action{{Adapter: "lanready_archive", Operation: "extract_archive", ArtifactDigest: digest, TargetRoot: "user_games", RelativePath: game.GameSlug}},
+				}},
+			})
+			continue
 		}
 		launcherID, adapter := releaseLauncher(game.LauncherAdapter)
 		if game.SourceID != 0 || launcherID == "" {
@@ -361,6 +412,10 @@ func (s *Service) GenerateAndPublishEvent(ctx context.Context, eventID int64, mi
 	if _, err = rand.Read(randomID); err != nil {
 		return result, err
 	}
+	artifacts := make([]any, 0, len(releaseArtifacts))
+	for _, artifact := range releaseArtifacts {
+		artifacts = append(artifacts, artifact)
+	}
 	payload := struct {
 		FormatVersion        int               `json:"formatVersion"`
 		EventID              string            `json:"eventId"`
@@ -372,7 +427,7 @@ func (s *Service) GenerateAndPublishEvent(ctx context.Context, eventID int64, mi
 		Artifacts            []any             `json:"artifacts"`
 		Launchers            []launcherRelease `json:"launchers"`
 		Games                []gameRelease     `json:"games"`
-	}{2, event.EventSlug, "release-" + hex.EncodeToString(randomID), sequence, now.Format(time.RFC3339), validUntil.Format(time.RFC3339), minimumClientVersion, []any{}, launchers, releaseGames}
+	}{2, event.EventSlug, "release-" + hex.EncodeToString(randomID), sequence, now.Format(time.RFC3339), validUntil.Format(time.RFC3339), minimumClientVersion, artifacts, launchers, releaseGames}
 	rawPayload, err := json.Marshal(payload)
 	if err != nil {
 		return result, err
@@ -388,6 +443,29 @@ func (s *Service) GenerateAndPublishEvent(ctx context.Context, eventID int64, mi
 	return GeneratedEventRelease{EventID: metadata.EventID, ReleaseID: metadata.ReleaseID, Sequence: metadata.Sequence, GameCount: len(releaseGames), LauncherCount: len(launchers)}, nil
 }
 
+// archiveFileName reduces a catalog source path to the bare file name the
+// release schema allows (no separators). The immutable game slug is the
+// fallback so a release always carries a usable, traversal-free name.
+func archiveFileName(sourcePath, gameSlug string) string {
+	name := sourcePath
+	if index := strings.LastIndexAny(name, `/\`); index >= 0 {
+		name = name[index+1:]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 255 {
+		return gameSlug + ".zip"
+	}
+	return name
+}
+
+// archiveMediaTypes lists the container formats the Windows client can extract.
+// Deliberately narrow: a generic octet-stream would let any byte blob claim to
+// be an installable archive.
+var archiveMediaTypes = map[string]bool{
+	"application/zip":              true,
+	"application/x-zip-compressed": true,
+}
+
 func releaseLauncher(adapter string) (string, string) {
 	switch adapter {
 	case "steam":
@@ -401,9 +479,20 @@ func releaseLauncher(adapter string) (string, string) {
 	}
 }
 
+// validateSupportedEventPayload is the central capability gate shared by
+// publish, activate and rollback. It admits exactly what the Windows client can
+// execute safely today and rejects every other operation, so an unsupported
+// action can never reach a signed, immutable release.
+//
+// Currently supported: provider-managed launcher games (detect only, no
+// payload) and standalone games delivered as a single archive extracted below
+// the user games root. Launcher installation, library imports and tree
+// materialisation stay blocked.
 func validateSupportedEventPayload(payload []byte) error {
 	var release struct {
-		Artifacts []any `json:"artifacts"`
+		Artifacts []struct {
+			Digest string `json:"digest"`
+		} `json:"artifacts"`
 		Launchers []struct {
 			Actions []struct {
 				Operation      string `json:"operation"`
@@ -412,14 +501,24 @@ func validateSupportedEventPayload(payload []byte) error {
 		} `json:"launchers"`
 		Games []struct {
 			LauncherID string `json:"launcherId"`
-			Payloads   []any  `json:"payloads"`
+			Payloads   []struct {
+				Type      string   `json:"type"`
+				Artifacts []string `json:"artifacts"`
+				Actions   []struct {
+					Adapter        string `json:"adapter"`
+					Operation      string `json:"operation"`
+					ArtifactDigest string `json:"artifactDigest"`
+					TargetRoot     string `json:"targetRoot"`
+				} `json:"actions"`
+			} `json:"payloads"`
 		} `json:"games"`
 	}
 	if err := json.Unmarshal(payload, &release); err != nil {
 		return err
 	}
-	if len(release.Artifacts) > 0 {
-		return ErrEventActionsUnsupported
+	declared := make(map[string]struct{}, len(release.Artifacts))
+	for _, artifact := range release.Artifacts {
+		declared[artifact.Digest] = struct{}{}
 	}
 	for _, launcher := range release.Launchers {
 		for _, action := range launcher.Actions {
@@ -428,10 +527,39 @@ func validateSupportedEventPayload(payload []byte) error {
 			}
 		}
 	}
+	referenced := map[string]struct{}{}
 	for _, game := range release.Games {
-		if game.LauncherID == "standalone" || len(game.Payloads) > 0 {
+		if game.LauncherID != "standalone" {
+			// Provider-managed games are installed by their own launcher and
+			// must not carry LANReady payloads.
+			if len(game.Payloads) > 0 {
+				return ErrEventActionsUnsupported
+			}
+			continue
+		}
+		if len(game.Payloads) != 1 {
 			return ErrEventActionsUnsupported
 		}
+		archive := game.Payloads[0]
+		if archive.Type != "archive" || len(archive.Artifacts) != 1 || len(archive.Actions) != 1 {
+			return ErrEventActionsUnsupported
+		}
+		action := archive.Actions[0]
+		if action.Adapter != "lanready_archive" || action.Operation != "extract_archive" || action.TargetRoot != "user_games" {
+			return ErrEventActionsUnsupported
+		}
+		if action.ArtifactDigest != archive.Artifacts[0] {
+			return ErrEventActionsUnsupported
+		}
+		if _, ok := declared[action.ArtifactDigest]; !ok {
+			return ErrEventActionsUnsupported
+		}
+		referenced[action.ArtifactDigest] = struct{}{}
+	}
+	// Every declared artifact must be reachable through a supported action, so
+	// a release can never carry bytes the client has no defined handling for.
+	if len(referenced) != len(declared) {
+		return ErrEventActionsUnsupported
 	}
 	return nil
 }
