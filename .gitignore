@@ -21,3 +21,6 @@ reports.ndjson
 /release-work/*
 !/release-work/.gitkeep
 /backups/
+secret.env
+*.env
+!.env.example

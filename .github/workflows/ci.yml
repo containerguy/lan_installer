@@ -56,6 +56,64 @@ jobs:
           files: LANReady.exe
           generate_release_notes: true
 
+  release-windows-gui:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+      # The two public keys are compiled into the client so it can verify
+      # signed events and updates. They are public by design, but they live in
+      # repository variables rather than the tree so a key rotation does not
+      # need a commit.
+      - name: Check release keys
+        shell: bash
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_RELEASE_PUBLIC_KEY }}
+          EVENT_RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_EVENT_RELEASE_PUBLIC_KEY }}
+        run: |
+          test -n "$RELEASE_PUBLIC_KEY" || { echo "Repository-Variable LANREADY_RELEASE_PUBLIC_KEY fehlt"; exit 1; }
+          test -n "$EVENT_RELEASE_PUBLIC_KEY" || { echo "Repository-Variable LANREADY_EVENT_RELEASE_PUBLIC_KEY fehlt"; exit 1; }
+          python scripts/validate_release_keys.py "$RELEASE_PUBLIC_KEY" "$EVENT_RELEASE_PUBLIC_KEY"
+      - name: Build portable GUI
+        shell: bash
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_RELEASE_PUBLIC_KEY }}
+          EVENT_RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_EVENT_RELEASE_PUBLIC_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          WAILS_VERSION=$(node -p "require('./cmd/lanready-gui/wails.json').info.productVersion")
+          test "$VERSION" = "$WAILS_VERSION" || { echo "Tag $VERSION passt nicht zu wails.json $WAILS_VERSION"; exit 1; }
+          cd cmd/lanready-gui
+          wails build -platform windows/amd64 -s -skipbindings -skipembedcreate -m -trimpath \
+            -webview2 download -o LANReady.exe \
+            -ldflags "-s -w -X main.version=$VERSION -X main.releasePublicKey=$RELEASE_PUBLIC_KEY -X main.eventReleasePublicKey=$EVENT_RELEASE_PUBLIC_KEY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LANReady-portable-${{ github.ref_name }}
+          path: cmd/lanready-gui/build/bin/LANReady.exe
+          if-no-files-found: error
+      # Deliberately unsigned: without a trusted code signing certificate the
+      # client shows a SmartScreen warning, and the server refuses to publish
+      # it as an auto-update. Manual distribution only.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: cmd/lanready-gui/build/bin/LANReady.exe
+          generate_release_notes: true
+
   release-docker-images:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
