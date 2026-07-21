@@ -102,6 +102,18 @@ func (c *Client) fetchUpdateMetadata(ctx context.Context, trusted map[string]ed2
 }
 
 func (c *Client) downloadUpdateArtifact(ctx context.Context, metadata protocol.ClientUpdateMetadata, partPath string) error {
+	return c.downloadVerifiedArtifact(ctx, metadata.ArtifactPath, metadata.Size, metadata.SHA256, partPath, "Clientupdate")
+}
+
+// downloadVerifiedArtifact resumably downloads one CAS artifact and verifies
+// size and digest before returning. Shared by the self-update path and game
+// installs so the range/resume handling exists exactly once.
+func (c *Client) downloadVerifiedArtifact(ctx context.Context, artifactPath string, size int64, digest, partPath, subject string) error {
+	metadata := struct {
+		ArtifactPath string
+		Size         int64
+		SHA256       string
+	}{artifactPath, size, digest}
 	var offset int64
 	if info, err := os.Stat(partPath); err == nil {
 		if !info.Mode().IsRegular() || info.Size() > metadata.Size {
@@ -133,7 +145,7 @@ func (c *Client) downloadUpdateArtifact(ctx context.Context, metadata protocol.C
 	}
 	response, err := httpClient(c.HTTP).Do(request)
 	if err != nil {
-		return fmt.Errorf("Clientupdate herunterladen: %w", err)
+		return fmt.Errorf("%s herunterladen: %w", subject, err)
 	}
 	defer response.Body.Close()
 	appendMode := offset > 0 && response.StatusCode == http.StatusPartialContent
@@ -143,7 +155,7 @@ func (c *Client) downloadUpdateArtifact(ctx context.Context, metadata protocol.C
 	if appendMode {
 		expectedPrefix := "bytes " + strconv.FormatInt(offset, 10) + "-"
 		if !strings.HasPrefix(response.Header.Get("Content-Range"), expectedPrefix) || !strings.HasSuffix(response.Header.Get("Content-Range"), "/"+strconv.FormatInt(metadata.Size, 10)) {
-			return errors.New("Clientupdate-Resume-Antwort ist inkonsistent")
+			return errors.New(subject + "-Resume-Antwort ist inkonsistent")
 		}
 	} else {
 		offset = 0
@@ -179,7 +191,7 @@ func (c *Client) downloadUpdateArtifact(ctx context.Context, metadata protocol.C
 		return closeErr
 	}
 	if written != remaining {
-		return fmt.Errorf("Clientupdate-Größe weicht ab: %d statt %d Byte", offset+written, metadata.Size)
+		return fmt.Errorf("%s-Größe weicht ab: %d statt %d Byte", subject, offset+written, metadata.Size)
 	}
 	return verifyUpdateFile(partPath, metadata.Size, metadata.SHA256)
 }
