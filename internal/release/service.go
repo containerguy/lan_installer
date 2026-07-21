@@ -469,10 +469,12 @@ func (s *Service) PublishEvent(ctx context.Context, rawEnvelope []byte, activate
 	return metadata, err
 }
 
-func (s *Service) requireCompatibleClients(ctx context.Context, minimumVersion string) error {
+// incompatibleClients lists active devices whose reported runtime version is
+// below minimumVersion, formatted for operator-facing errors.
+func (s *Service) incompatibleClients(ctx context.Context, minimumVersion string) ([]string, error) {
 	devices, err := s.store.ActiveDevices(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	incompatible := []string{}
 	for _, device := range devices {
@@ -480,6 +482,14 @@ func (s *Service) requireCompatibleClients(ctx context.Context, minimumVersion s
 		if compareErr != nil || comparison < 0 {
 			incompatible = append(incompatible, device.Name+" ("+device.ClientVersion+")")
 		}
+	}
+	return incompatible, nil
+}
+
+func (s *Service) requireCompatibleClients(ctx context.Context, minimumVersion string) error {
+	incompatible, err := s.incompatibleClients(ctx, minimumVersion)
+	if err != nil {
+		return err
 	}
 	if len(incompatible) > 0 {
 		return &ClientCompatibilityError{MinimumVersion: minimumVersion, Devices: incompatible}
@@ -489,6 +499,19 @@ func (s *Service) requireCompatibleClients(ctx context.Context, minimumVersion s
 
 func (s *Service) requireCompatibleStableUpdate(ctx context.Context, minimumVersion string) error {
 	if comparison, err := protocol.CompareSemanticVersions(minimumVersion, "0.2.0"); err == nil && comparison < 0 {
+		return nil
+	}
+	// A distributable stable update only has to exist while some active device
+	// still needs upgrading. Once every active device already reports the
+	// minimum version there is nobody left to serve, so a manually distributed
+	// client may activate without a self-update artifact in the CAS. Devices
+	// enrolling later are unaffected: the device endpoints keep refusing to
+	// hand out a release below its minimum client version.
+	incompatible, err := s.incompatibleClients(ctx, minimumVersion)
+	if err != nil {
+		return err
+	}
+	if len(incompatible) == 0 {
 		return nil
 	}
 	update, err := s.store.LatestClientUpdateRelease(ctx, "stable")

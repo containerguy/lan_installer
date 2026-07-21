@@ -112,16 +112,24 @@ func TestServicePublishesOnlyTrustedValidatedRelease(t *testing.T) {
 	if err != nil || metadata.Sequence != 1 {
 		t.Fatalf("publish: %#v %v", metadata, err)
 	}
+	// An outdated client keeps the client-update path live, so activation has to
+	// reverify that update's CAS bytes before forcing anyone to upgrade.
+	if err = st.CreateDevice(ctx, store.Device{ID: "old-pc", Name: "Alter PC", PublicKey: make([]byte, ed25519.PublicKeySize), WindowsVersion: "11", ClientVersion: "0.1.0"}); err != nil {
+		t.Fatal(err)
+	}
 	artifacts.reject = true
 	if _, err = service.ActivateEvent(ctx, metadata.EventID, metadata.Sequence, &store.AuditEntry{ActorUserID: 1, Action: "activate_event_release"}); err == nil {
 		t.Fatalf("activation accepted corrupt CAS artifact: %v", err)
 	}
+	if artifacts.calls != 2 {
+		t.Fatalf("CAS was not reverified at activation: %d calls", artifacts.calls)
+	}
 	artifacts.reject = false
+	if err = st.UpdateActiveDeviceClientVersion(ctx, "old-pc", "0.2.0"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = service.ActivateEvent(ctx, metadata.EventID, metadata.Sequence, &store.AuditEntry{ActorUserID: 1, Action: "activate_event_release"}); err != nil {
 		t.Fatalf("activate staged release: %v", err)
-	}
-	if artifacts.calls != 3 {
-		t.Fatalf("CAS was not reverified at activation: %d calls", artifacts.calls)
 	}
 	active, err := st.ActiveEventRelease(ctx)
 	if err != nil || active.EventID != "kellerlan-2026" || active.Sequence != 1 || len(active.EnvelopeJSON) == 0 {
@@ -263,5 +271,97 @@ func TestGenerateAndPublishProviderManagedEvent(t *testing.T) {
 	_, payload, metadata, err := validator.ValidateEventEnvelope(active.EnvelopeJSON, map[string]ed25519.PublicKey{protocol.KeyID(publicKey): publicKey})
 	if err != nil || metadata.EventID != "lan-2026" || len(metadata.Artifacts) != 0 || !strings.Contains(string(payload), `"payloads":[]`) || !strings.Contains(string(payload), `"operation":"detect"`) {
 		t.Fatalf("provider release payload=%s metadata=%#v err=%v", payload, metadata, err)
+	}
+}
+
+// Manually distributed clients never publish a self-update artifact. Once every
+// active device already reports the minimum version there is nobody left to
+// update, so activation must not keep demanding one.
+func TestActivateWithoutStableUpdateWhenAllClientsAreCurrent(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/manual.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err = st.BootstrapAdmin(ctx, "admin", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	launchers, err := st.Launchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steamID int64
+	for _, launcher := range launchers {
+		if launcher.Adapter == "steam" {
+			steamID = launcher.ID
+		}
+	}
+	gameID, err := st.SaveGameAtomic(ctx, store.Game{Slug: "cs2", Name: "Counter-Strike 2", LauncherID: steamID, ExternalGameID: "730", Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := st.SaveGameVersionAtomic(ctx, store.GameVersion{GameID: gameID, Version: "latest", SourceID: 0, Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventID, err := st.SaveEventAtomic(ctx, store.Event{Slug: "lan-2026", Name: "LAN 2026", Status: "draft"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SaveEventGameAtomic(ctx, store.EventGame{EventID: eventID, GameVersionID: versionID, Required: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	schemaDir, err := filepath.Abs("../../docs/contracts/schemas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := protocol.NewReleaseValidator(schemaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatePublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewWithPurposeKeyrings(st, validator, map[string]ed25519.PublicKey{protocol.KeyID(publicKey): publicKey}, map[string]ed25519.PublicKey{protocol.KeyID(updatePublicKey): updatePublicKey}, acceptingArtifactVerifier{}, "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.SetEventSigner(testEventSigner{key: privateKey}, protocol.KeyID(publicKey)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.GenerateAndPublishEvent(ctx, eventID, "0.2.0", time.Now().UTC().Add(24*time.Hour), false, &store.AuditEntry{ActorUserID: 1, Action: "generate_publish_event_release"})
+	if err != nil {
+		t.Fatalf("generate release: %v", err)
+	}
+	// A device below the minimum version still blocks: it would be stranded
+	// without any way to upgrade.
+	if err = st.CreateDevice(ctx, store.Device{ID: "old-pc", Name: "Alter PC", PublicKey: make([]byte, ed25519.PublicKeySize), WindowsVersion: "11", ClientVersion: "0.1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.ActivateEvent(ctx, result.EventID, result.Sequence, &store.AuditEntry{ActorUserID: 1, Action: "activate_event_release"}); err == nil {
+		t.Fatal("activation accepted an outdated client without any stable update")
+	} else {
+		var updateCompatibility *CompatibleClientUpdateError
+		if !errors.As(err, &updateCompatibility) {
+			t.Fatalf("unexpected error for outdated client: %v", err)
+		}
+	}
+	// Once that device is manually upgraded, activation succeeds even though no
+	// client update release was ever published.
+	if err = st.UpdateActiveDeviceClientVersion(ctx, "old-pc", "0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.ActivateEvent(ctx, result.EventID, result.Sequence, &store.AuditEntry{ActorUserID: 1, Action: "activate_event_release"}); err != nil {
+		t.Fatalf("activation with current clients but no stable update failed: %v", err)
+	}
+	active, err := st.ActiveEventRelease(ctx)
+	if err != nil || active.Sequence != result.Sequence {
+		t.Fatalf("release was not activated: seq=%d err=%v", active.Sequence, err)
 	}
 }

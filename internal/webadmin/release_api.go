@@ -239,7 +239,7 @@ func (a *Admin) releaseMutationError(w http.ResponseWriter, err error) {
 	case errors.As(err, &compatibility):
 		a.apiErrorWithFields(w, http.StatusConflict, "release_clients_incompatible", "Aktivierung blockiert: Aktualisiere zuerst alle aktiven LANReady-Clients auf mindestens "+compatibility.MinimumVersion+".", map[string]any{"devices": compatibility.Devices, "minimumClientVersion": compatibility.MinimumVersion})
 	case errors.As(err, &updateCompatibility):
-		a.apiErrorWithFields(w, http.StatusConflict, "release_client_update_missing", "Aktivierung blockiert: Im Stable-Kanal fehlt ein vollständig signiertes Clientupdate auf mindestens "+updateCompatibility.MinimumVersion+".", map[string]any{"minimumClientVersion": updateCompatibility.MinimumVersion})
+		a.apiErrorWithFields(w, http.StatusConflict, "release_client_update_missing", "Aktivierung blockiert: Es sind Clients unterhalb von "+updateCompatibility.MinimumVersion+" aktiv und im Stable-Kanal liegt kein signiertes Clientupdate. Entweder ein Clientupdate veröffentlichen oder alle betroffenen PCs manuell auf "+updateCompatibility.MinimumVersion+" aktualisieren.", map[string]any{"minimumClientVersion": updateCompatibility.MinimumVersion})
 	case errors.Is(err, store.ErrReleaseSequence):
 		a.apiError(w, http.StatusConflict, "release_sequence_conflict", "Die Release-Sequenz ist nicht der nächste monotone Wert.")
 	case errors.Is(err, store.ErrReleaseEventUnknown):
