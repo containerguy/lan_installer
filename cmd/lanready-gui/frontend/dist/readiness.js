@@ -21,8 +21,9 @@
     unidentifiable: "Keine stabile Spiel-ID im Release"
   };
   const launcherLabels = {
+    detected: "Installiert",
     detected_version_unverified: "Über Spielefund erkannt · Version ungeprüft",
-    not_detected: "Nicht über Spielefunde erkannt"
+    not_detected: "Nicht installiert"
   };
 
   function clampPercentage(value) {
@@ -48,7 +49,9 @@
   }
 
   function componentBadge(status, required) {
-    if (status === "ready") return "Bereit";
+    // A launcher found as an installed application is genuinely ready; only a
+    // launcher inferred from a game find keeps its version caveat.
+    if (status === "ready" || status === "detected") return "Bereit";
     if (!required) return "Optional offen";
     if (status === "detected_version_unverified") return "Version offen";
     return "Handlung nötig";

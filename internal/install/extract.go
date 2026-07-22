@@ -49,6 +49,12 @@ var windowsReservedNames = map[string]bool{
 // Extract unpacks archivePath below targetDir. targetDir is created if needed
 // and must end up containing every written path.
 func Extract(ctx context.Context, archivePath, targetDir string, limits Limits) error {
+	return extractWithProgress(ctx, archivePath, targetDir, limits, nil)
+}
+
+// extractWithProgress is Extract plus per-entry reporting; unpacking gigabytes
+// onto slow storage otherwise looks indistinguishable from a hang.
+func extractWithProgress(ctx context.Context, archivePath, targetDir string, limits Limits, report func(Progress)) error {
 	root, err := filepath.Abs(targetDir)
 	if err != nil {
 		return err
@@ -70,9 +76,12 @@ func Extract(ctx context.Context, archivePath, targetDir string, limits Limits) 
 		return fmt.Errorf("%w: archive holds %d entries, limit is %d", errUnsafeEntry, len(reader.File), limits.MaxFiles)
 	}
 	var total int64
-	for _, entry := range reader.File {
+	for index, entry := range reader.File {
 		if err = ctx.Err(); err != nil {
 			return err
+		}
+		if report != nil {
+			report(Progress{Stage: StageExtract, Done: int64(index), Total: int64(len(reader.File))})
 		}
 		relative, err := safeRelativePath(entry.Name)
 		if err != nil {

@@ -1,6 +1,7 @@
 package webadmin
 
 import (
+	"database/sql"
 	"errors"
 	"html/template"
 	"net/http"
@@ -543,7 +544,12 @@ const clientsPageHTML = `<!doctype html>
   {{if .EnrollmentCode}}<section class="card enrollment-code"><p class="eyebrow">Einmaliger Enrollment-Code</p><h2>{{.EnrollmentCode}}</h2><p>Gültig bis {{.ExpiresAt}}. Der Klartext wird nur jetzt angezeigt.</p></section>{{end}}
   {{if .Clients}}<div class="clients-grid">{{range $clientIndex, $client := .Clients}}
     <article class="card dashboard-card client-card">
-      <div class="editor-head"><div><h2>{{.Name}}</h2><p class="subtle mono">{{.ID}}</p></div>{{if eq .Status "active"}}<span class="badge ok"><span class="dot"></span>Aktiv</span>{{else}}<span class="badge inactive">Gesperrt</span>{{end}}</div>
+      <div class="editor-head"><div><h2>{{.Name}}</h2><p class="subtle mono">{{.ID}}</p></div><div class="client-head-actions">{{if eq .Status "active"}}<span class="badge ok"><span class="dot"></span>Aktiv</span>{{else}}<span class="badge inactive">Gesperrt</span>{{end}}{{if $.CanImport}}
+        <form method="post" action="/admin/clients/device-status" class="device-status-form" onsubmit="return confirm({{if eq .Status "active"}}'{{.Name}} sperren? Der PC zaehlt dann nicht mehr fuer die Aktivierungspruefung. Inventar und Katalogzuordnungen bleiben erhalten.'{{else}}'{{.Name}} wieder freigeben? Der PC zaehlt dann wieder fuer die Aktivierungspruefung.'{{end}});">
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="deviceId" value="{{.ID}}">
+          <input type="hidden" name="status" value="{{if eq .Status "active"}}revoked{{else}}active{{end}}">
+          <button class="button" type="submit">{{if eq .Status "active"}}Sperren{{else}}Freigeben{{end}}</button>
+        </form>{{end}}</div></div>
       <dl class="client-meta"><dt>Windows</dt><dd>{{.WindowsVersion}}</dd><dt>Client-Version</dt><dd>{{.ClientVersion}}</dd><dt>Registriert</dt><dd>{{.EnrolledAt}}</dd><dt>Letzter Kontakt</dt><dd>{{.LastSeenAt}}</dd><dt>Inventarscan</dt><dd>{{.ScannedAt}}</dd></dl>
       {{if .Installations}}{{if and $.CanImport .HasBulkEligible}}<form id="bulk-import-{{$clientIndex}}" method="post" action="/admin/clients/catalog-import-bulk" class="bulk-import-form"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="device_id" value="{{$client.ID}}"><input type="hidden" name="scan_id" value="{{$client.ScanID}}"><div class="bulk-import-toolbar"><label class="check"><input type="checkbox" class="bulk-select-all"> Bis zu 100 offene Übernahmen auswählen</label><span class="subtle bulk-selection-count" aria-live="polite">0 ausgewählt</span><button class="button primary bulk-import-submit" type="submit" disabled>Ausgewählte übernehmen</button></div><p class="subtle bulk-import-help">Launcher-Spiele werden als deaktivierte Entwürfe mit ihrer Bezugsplattform angelegt; ein eigenes LANReady-Paket bleibt optional. Manuell registrierte Spiele werden ausschließlich ihrem bereits vorhandenen Katalogeintrag zugeordnet.</p></form>{{end}}<div class="table-wrap"><table class="inventory-table"><thead><tr>{{if $.CanImport}}<th class="inventory-select-column"><span class="sr-only">Auswahl</span></th>{{end}}<th>Spiel</th><th>Launcher / ID</th><th>Version</th><th>Installationspfad</th><th>Katalog</th></tr></thead><tbody>{{range .Installations}}{{$item := .}}
         <tr>{{if $.CanImport}}<td class="inventory-select-cell" data-label="Auswahl">{{if .BulkEligible}}<input class="bulk-item-select" type="checkbox" name="position" value="{{.Position}}" form="bulk-import-{{$clientIndex}}" aria-label="{{.DisplayName}} für Sammelübernahme auswählen" {{if .BulkSelected}}checked{{end}}><small>{{.BulkAction}}</small>{{else}}<span class="subtle">—</span>{{end}}</td>{{end}}<td data-label="Spiel"><strong>{{.DisplayName}}</strong></td><td data-label="Launcher / ID"><span class="launcher-label">{{.LauncherName}}</span><div class="subtle mono">{{.ExternalGameID}}</div></td><td data-label="Version">{{if .DetectedVersion}}{{.DetectedVersion}}{{else}}unbekannt{{end}}<div class="subtle">{{.VersionSource}}</div></td><td data-label="Pfad"><span class="path-value">{{.InstallPath}}</span></td><td data-label="Katalog">
@@ -558,3 +564,41 @@ const clientsPageHTML = `<!doctype html>
 </main></div><script>{{if .MessageIsError}}document.getElementById("clients-message")?.focus();{{end}}document.querySelectorAll(".import-form,.version-import-form").forEach(function(form){form.addEventListener("submit",function(){form.setAttribute("aria-busy","true");form.querySelectorAll("button[type=submit]").forEach(function(button){button.disabled=true;button.textContent="Wird gespeichert …"})})});document.querySelectorAll(".bulk-import-form").forEach(function(form){var items=Array.from(document.querySelectorAll('input[form="'+form.id+'"].bulk-item-select'));var all=form.querySelector(".bulk-select-all");var count=form.querySelector(".bulk-selection-count");var submit=form.querySelector(".bulk-import-submit");function update(){var selected=items.filter(function(item){return item.checked}).length;count.textContent=selected+" von maximal 100 ausgewählt";submit.disabled=selected===0||selected>100;all.checked=items.length<=100&&selected>0&&selected===items.length;all.indeterminate=selected>0&&!all.checked}items.forEach(function(item){item.addEventListener("change",function(){if(item.checked&&items.filter(function(candidate){return candidate.checked}).length>100){item.checked=false;window.alert("Pro Sammelübernahme können höchstens 100 Einträge ausgewählt werden.")}update()})});all.addEventListener("change",function(){items.forEach(function(item,index){item.checked=all.checked&&index<100});update()});form.addEventListener("submit",function(event){var selected=items.filter(function(item){return item.checked}).length;if(selected===0||selected>100){event.preventDefault();return}if(!window.confirm(selected+" ausgewählte Übernahmen speichern? Die Aktion wird vollständig zurückgerollt, falls ein Eintrag nicht mehr aktuell ist.")){event.preventDefault();return}form.setAttribute("aria-busy","true");submit.disabled=true;submit.textContent="Übernahme läuft …"});update()});</script></body></html>`
 
 const deviceAuthorizationPageHTML = `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Windows-Client anmelden · LANReady</title><link rel="stylesheet" href="/admin/assets/management.css?v=20260720-2"></head><body class="auth-body"><main class="auth-shell"><div class="auth-brand"><span class="brand-mark">L</span><span>LANReady</span></div><section class="card auth-card"><p class="eyebrow">Windows-Client</p><h1>Client anmelden</h1>{{if .Message}}<div class="notice" role="status">{{.Message}}</div>{{end}}{{if .Success}}<p>Dieses Browserfenster kann geschlossen werden.</p>{{else if .Denied}}<p>Dieses Browserfenster kann geschlossen werden.</p>{{else if .Ready}}<p><strong>{{.DeviceName}}</strong> möchte das lokale Spieleinventar mit deinem Benutzerkonto synchronisieren.</p><p class="subtle">Der Auftrag läuft am {{.ExpiresAt}} ab. Dein Passwort wird nicht an den Windows-Client weitergegeben.</p><form method="post" action="/admin/device"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="code" value="{{.Code}}"><div class="actions"><button class="button primary" type="submit" name="decision" value="approve">Anmeldung bestätigen</button><button class="button" type="submit" name="decision" value="deny">Ablehnen</button></div></form>{{else}}<p>Gib den Code ein, den der Windows-Client anzeigt.</p><form method="get" action="/admin/device"><label class="field"><span>Einmalcode</span><input class="input" name="code" value="{{.Code}}" autocomplete="one-time-code" maxlength="9" required autofocus></label><button class="button primary" type="submit">Code prüfen</button></form>{{end}}</section></main></body></html>`
+
+// setDeviceStatus revokes or restores a client from the clients page.
+//
+// Revoking matters beyond access control: release activation requires every
+// active device to run at least the release's minimum client version, so a
+// retired test machine would otherwise block activation forever.
+func (a *Admin) setDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	session, _, ok := a.validRequest(w, r)
+	if !ok {
+		return
+	}
+	if !hasRole(session.User, "admin") {
+		_ = a.store.Audit(r.Context(), &session.User.ID, "set_device_status_denied", "device", r.FormValue("deviceId"), "", r.RemoteAddr)
+		http.Error(w, "Nur Administratoren dürfen Clients sperren oder freigeben", http.StatusForbidden)
+		return
+	}
+	deviceID := strings.TrimSpace(r.FormValue("deviceId"))
+	status := strings.TrimSpace(r.FormValue("status"))
+	if deviceID == "" {
+		a.renderClientsPage(w, r, session, store.EnrollmentCode{}, http.StatusUnprocessableEntity, "Es wurde kein Client ausgewählt.", false)
+		return
+	}
+	err := a.store.SetDeviceStatus(r.Context(), deviceID, status, &store.AuditEntry{
+		ActorUserID: session.User.ID, Action: "set_device_status", RemoteAddr: r.RemoteAddr,
+	})
+	switch {
+	case errors.Is(err, store.ErrDeviceStatus):
+		a.renderClientsPage(w, r, session, store.EnrollmentCode{}, http.StatusUnprocessableEntity, "Ungültiger Status.", false)
+		return
+	case errors.Is(err, sql.ErrNoRows):
+		a.renderClientsPage(w, r, session, store.EnrollmentCode{}, http.StatusNotFound, "Dieser Client existiert nicht mehr.", false)
+		return
+	case err != nil:
+		a.renderClientsPage(w, r, session, store.EnrollmentCode{}, http.StatusInternalServerError, "Der Status konnte nicht geändert werden.", false)
+		return
+	}
+	http.Redirect(w, r, "/admin/clients", http.StatusSeeOther)
+}

@@ -564,3 +564,47 @@ func (s *Store) DeviceInventories(ctx context.Context) ([]DeviceInventory, error
 	}
 	return out, nil
 }
+
+// ErrDeviceStatus reports an invalid target status for a device.
+var ErrDeviceStatus = errors.New("device status is invalid")
+
+// SetDeviceStatus revokes or restores a device.
+//
+// A revoked device keeps its inventory and catalog mappings: those record what
+// was found, not who may connect. Revoking only stops the device from counting
+// as active, which is what release activation and the device API check.
+func (s *Store) SetDeviceStatus(ctx context.Context, deviceID, status string, audit *AuditEntry) error {
+	if status != "active" && status != "revoked" {
+		return ErrDeviceStatus
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE devices SET status=? WHERE id=?`, status, deviceID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	if audit != nil {
+		entry := *audit
+		entry.ObjectType = "device"
+		if entry.Action == "" {
+			entry.Action = "set_device_status"
+		}
+		if entry.Details == "" {
+			entry.Details = deviceID + ":" + status
+		}
+		if err = writeAuditTx(ctx, tx, &entry); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

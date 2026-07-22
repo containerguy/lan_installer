@@ -19,6 +19,23 @@ type ArtifactFetcher interface {
 	FetchArtifact(ctx context.Context, digest string, size int64, destination string) error
 }
 
+// Stage names reported through [Progress] while an install runs. Verification
+// and extraction each move gigabytes, so they must be visible: on slow storage
+// they take longer than the download itself.
+const (
+	StageDownload = "download"
+	StageVerify   = "verify"
+	StageExtract  = "extract"
+)
+
+// Progress reports what an install is doing. Done/Total mean bytes during
+// download and verification, and files during extraction.
+type Progress struct {
+	Stage string
+	Done  int64
+	Total int64
+}
+
 // ArchiveInstall is one extract_archive action from a signed event release,
 // already parsed. Digest is the bare lowercase hex digest without the
 // "sha256:" prefix.
@@ -36,7 +53,10 @@ var errUnsafeInstall = errors.New("install target is unsafe")
 // Order matters: the digest is verified over the complete downloaded file
 // before a single entry is read, so a corrupted or substituted download never
 // reaches the extractor. Extraction itself is contained by [Extract].
-func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveInstall, gamesRoot string, limits Limits) (string, error) {
+func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveInstall, gamesRoot string, limits Limits, report func(Progress)) (string, error) {
+	if report == nil {
+		report = func(Progress) {}
+	}
 	target, err := ResolveInstallDir(gamesRoot, spec.RelativePath)
 	if err != nil {
 		return "", err
@@ -56,7 +76,10 @@ func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveIn
 	if err = fetcher.FetchArtifact(ctx, spec.Digest, spec.Size, download); err != nil {
 		return "", err
 	}
-	if err = verifyFile(download, spec.Digest, spec.Size); err != nil {
+	report(Progress{Stage: StageVerify, Total: spec.Size})
+	if err = verifyFile(download, spec.Digest, spec.Size, func(done int64) {
+		report(Progress{Stage: StageVerify, Done: done, Total: spec.Size})
+	}); err != nil {
 		return "", err
 	}
 	// Extract into a staging directory and only then move it into place, so an
@@ -64,7 +87,8 @@ func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveIn
 	// later looks installed.
 	staging := target + ".partdir"
 	os.RemoveAll(staging)
-	if err = Extract(ctx, download, staging, limits); err != nil {
+	report(Progress{Stage: StageExtract})
+	if err = extractWithProgress(ctx, download, staging, limits, report); err != nil {
 		os.RemoveAll(staging)
 		return "", err
 	}
@@ -76,7 +100,7 @@ func InstallArchive(ctx context.Context, fetcher ArtifactFetcher, spec ArchiveIn
 }
 
 // verifyFile checks size first (cheap) and then the digest over the full file.
-func verifyFile(path, digest string, size int64) error {
+func verifyFile(path, digest string, size int64, onProgress func(int64)) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -93,7 +117,7 @@ func verifyFile(path, digest string, size int64) error {
 	}
 	defer file.Close()
 	hash := sha256.New()
-	if _, err = io.Copy(hash, file); err != nil {
+	if _, err = io.Copy(hash, &progressReader{reader: file, report: onProgress}); err != nil {
 		return err
 	}
 	actual := hex.EncodeToString(hash.Sum(nil))
@@ -120,4 +144,21 @@ func ResolveInstallDir(gamesRoot, relativePath string) (string, error) {
 		return "", fmt.Errorf("%w: %q escapes the games root", errUnsafeInstall, relativePath)
 	}
 	return target, nil
+}
+
+// progressReader reports how much has been read so a long hash over slow
+// storage does not look like a hang.
+type progressReader struct {
+	reader io.Reader
+	read   int64
+	report func(int64)
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if r.report != nil {
+		r.report(r.read)
+	}
+	return n, err
 }

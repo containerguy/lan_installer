@@ -78,3 +78,18 @@ test("durations stay readable across magnitudes", () => {
   assert.equal(installs.formatDuration(300), "5 min");
   assert.equal(installs.formatDuration(3900), "1 h 5 min");
 });
+
+test("extraction is counted in files, not misreported as megabytes", () => {
+  const text = installs.progressText({
+    running: true, stage: "Wird entpackt", downloaded: 342, total: 1180, percent: 29
+  });
+  assert.match(text, /342 von 1180 Dateien/);
+  assert.doesNotMatch(text, /MB|GB/);
+});
+
+test("the stage is named so a slow verify does not look frozen", () => {
+  const text = installs.progressText({
+    running: true, stage: "Wird geprüft", downloaded: 644445616, total: 1288891233, percent: 50
+  });
+  assert.match(text, /Wird geprüft/);
+});

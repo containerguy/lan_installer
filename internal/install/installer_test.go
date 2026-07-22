@@ -47,7 +47,7 @@ func TestInstallArchiveExtractsVerifiedPayload(t *testing.T) {
 	root := isolatedTarget(t)
 	fetcher := &stubFetcher{body: body}
 	spec := ArchiveInstall{GameID: "flatout2", Digest: digestOf(body), Size: int64(len(body)), RelativePath: "flatout2"}
-	dir, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits)
+	dir, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestInstallArchiveRejectsDigestMismatch(t *testing.T) {
 	root := isolatedTarget(t)
 	fetcher := &stubFetcher{body: body}
 	spec := ArchiveInstall{GameID: "flatout2", Digest: digestOf([]byte("different archive")), Size: int64(len(body)), RelativePath: "flatout2"}
-	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); err == nil {
+	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); err == nil {
 		t.Fatal("substituted artifact was installed")
 	}
 	assertOnlyDebrisFree(t, root)
@@ -82,7 +82,7 @@ func TestInstallArchiveRejectsSizeMismatch(t *testing.T) {
 	root := isolatedTarget(t)
 	fetcher := &stubFetcher{body: body}
 	spec := ArchiveInstall{GameID: "flatout2", Digest: digestOf(body), Size: int64(len(body)) + 1, RelativePath: "flatout2"}
-	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); err == nil {
+	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); err == nil {
 		t.Fatal("artifact with unexpected size was installed")
 	}
 	assertOnlyDebrisFree(t, root)
@@ -96,7 +96,7 @@ func TestInstallArchiveRejectsEscapingRelativePath(t *testing.T) {
 		root := isolatedTarget(t)
 		fetcher := &stubFetcher{body: body}
 		spec := ArchiveInstall{GameID: "x", Digest: digestOf(body), Size: int64(len(body)), RelativePath: relative}
-		if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); err == nil {
+		if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); err == nil {
 			t.Fatalf("relative path %q was accepted", relative)
 		}
 		if fetcher.calls != 0 {
@@ -117,7 +117,7 @@ func TestInstallArchiveLeavesNothingWhenExtractionFails(t *testing.T) {
 	root := isolatedTarget(t)
 	fetcher := &stubFetcher{body: body}
 	spec := ArchiveInstall{GameID: "x", Digest: digestOf(body), Size: int64(len(body)), RelativePath: "x"}
-	if _, err = InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); err == nil {
+	if _, err = InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); err == nil {
 		t.Fatal("hostile archive was installed")
 	}
 	assertOnlyDebrisFree(t, root)
@@ -132,7 +132,7 @@ func TestInstallArchiveRefusesExistingTarget(t *testing.T) {
 	}
 	fetcher := &stubFetcher{body: body}
 	spec := ArchiveInstall{GameID: "flatout2", Digest: digestOf(body), Size: int64(len(body)), RelativePath: "flatout2"}
-	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); err == nil {
+	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); err == nil {
 		t.Fatal("install overwrote an existing directory")
 	}
 	if fetcher.calls != 0 {
@@ -145,7 +145,7 @@ func TestInstallArchivePropagatesFetchFailure(t *testing.T) {
 	failure := errors.New("network down")
 	fetcher := &stubFetcher{failWith: failure}
 	spec := ArchiveInstall{GameID: "x", Digest: digestOf([]byte("x")), Size: 1, RelativePath: "x"}
-	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits); !errors.Is(err, failure) {
+	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, nil); !errors.Is(err, failure) {
 		t.Fatalf("fetch failure was not propagated: %v", err)
 	}
 	assertOnlyDebrisFree(t, root)
@@ -163,6 +163,32 @@ func assertOnlyDebrisFree(t *testing.T, root string) {
 		name := entry.Name()
 		if filepath.Ext(name) == ".part" || filepath.Ext(name) == ".partdir" {
 			t.Fatalf("install left %q behind", name)
+		}
+	}
+}
+
+// A slow disk makes verification and extraction take longer than the download.
+// Without stage reporting the UI cannot tell a working install from a hang.
+func TestInstallArchiveReportsEveryStage(t *testing.T) {
+	body := archiveBytes(t)
+	root := isolatedTarget(t)
+	fetcher := &stubFetcher{body: body}
+	spec := ArchiveInstall{GameID: "g", Digest: digestOf(body), Size: int64(len(body)), RelativePath: "g"}
+	var stages []string
+	if _, err := InstallArchive(context.Background(), fetcher, spec, root, DefaultLimits, func(p Progress) {
+		if len(stages) == 0 || stages[len(stages)-1] != p.Stage {
+			stages = append(stages, p.Stage)
+		}
+	}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, s := range stages {
+		seen[s] = true
+	}
+	for _, want := range []string{StageVerify, StageExtract} {
+		if !seen[want] {
+			t.Fatalf("stage %q was never reported, got %v", want, stages)
 		}
 	}
 }

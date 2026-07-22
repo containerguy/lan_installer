@@ -37,3 +37,11 @@ test("optional components never demand action", () => {
   assert.equal(componentBadge("missing", true), "Handlung nötig");
   assert.equal(componentBadge("detected_version_unverified", true), "Version offen");
 });
+
+test("an installed launcher counts as ready even without any of its games", () => {
+  assert.equal(componentBadge("detected", true), "Bereit");
+});
+
+test("a launcher only inferred from a game find keeps its version caveat", () => {
+  assert.equal(componentBadge("detected_version_unverified", true), "Version offen");
+});

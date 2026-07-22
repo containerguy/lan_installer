@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -166,5 +167,61 @@ func TestInventoryRejectsWrongDeviceTokenAndInvalidLauncher(t *testing.T) {
 	ctx := context.Background()
 	if err = st.SaveDeviceInventory(ctx, "missing", "invalid", InventoryScan{ID: "scan", ClientVersion: "1", ScannedAt: time.Now(), Installations: []InventoryInstallation{{Launcher: "epic", ExternalGameID: "1", DisplayName: "Game", VersionSource: "unknown", InstallPath: `C:\\Game`}}}); err == nil || errors.Is(err, ErrUserTokenInvalid) {
 		t.Fatalf("invalid launcher should fail first, got %v", err)
+	}
+}
+
+// Revoking a device must not destroy what it reported: inventory and catalog
+// mappings record findings, not permission to connect.
+func TestSetDeviceStatusKeepsInventory(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(t.TempDir() + "/devices.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err = s.BootstrapAdmin(ctx, "admin", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	device := Device{ID: "pc-1", Name: "PC 1", PublicKey: make([]byte, 32), WindowsVersion: "11", ClientVersion: "0.2.0"}
+	if err = s.CreateDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.ActiveDevices(ctx)
+	if err != nil || len(active) != 1 {
+		t.Fatalf("device not active: %d %v", len(active), err)
+	}
+	if err = s.SetDeviceStatus(ctx, "pc-1", "revoked", &AuditEntry{ActorUserID: 1, Action: "set_device_status"}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	active, err = s.ActiveDevices(ctx)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("revoked device still counts as active: %d %v", len(active), err)
+	}
+	// Restoring must work, otherwise a mistaken revoke would be permanent.
+	if err = s.SetDeviceStatus(ctx, "pc-1", "active", &AuditEntry{ActorUserID: 1, Action: "set_device_status"}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if active, err = s.ActiveDevices(ctx); err != nil || len(active) != 1 {
+		t.Fatalf("device was not restored: %d %v", len(active), err)
+	}
+}
+
+func TestSetDeviceStatusRejectsUnknownStatusAndDevice(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(t.TempDir() + "/devices2.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.CreateDevice(ctx, Device{ID: "pc-1", Name: "PC 1", PublicKey: make([]byte, 32), WindowsVersion: "11", ClientVersion: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"", "inactive", "deleted", "ACTIVE"} {
+		if err = s.SetDeviceStatus(ctx, "pc-1", status, nil); !errors.Is(err, ErrDeviceStatus) {
+			t.Fatalf("status %q was accepted: %v", status, err)
+		}
+	}
+	if err = s.SetDeviceStatus(ctx, "does-not-exist", "revoked", nil); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unknown device was accepted: %v", err)
 	}
 }

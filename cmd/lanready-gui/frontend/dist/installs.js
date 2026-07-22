@@ -54,9 +54,16 @@
     if (!status || !status.running) return "";
     if (!status.total || status.total <= 0) return status.stage || "Wird vorbereitet …";
     const percent = Math.min(100, Math.max(0, Number(status.percent) || 0));
+    const stage = status.stage || "";
+    // Extraction counts files, not bytes; showing "MB" there would be wrong.
+    if (stage === "Wird entpackt") {
+      return status.total > 0
+        ? `${stage} · ${status.downloaded} von ${status.total} Dateien`
+        : `${stage} …`;
+    }
     const done = formatSize(status.downloaded);
     const total = formatSize(status.total);
-    let text = `${percent.toFixed(1)} % · ${done} von ${total}`;
+    let text = `${stage ? stage + " · " : ""}${percent.toFixed(1)} % · ${done} von ${total}`;
     const rate = Number(status.bytesPerSecond) || 0;
     if (rate > 0) {
       text += ` · ${formatSize(rate)}/s`;

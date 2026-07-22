@@ -127,8 +127,18 @@ func (a *App) InstallGame(gameID string) (InstallResult, error) {
 		if p.Total > 0 {
 			percent = float64(p.Downloaded) / float64(p.Total) * 100
 		}
+		// Verification and extraction move as many bytes as the download and,
+		// on slow storage, take longer; naming the stage keeps a working
+		// install from looking frozen at 100%.
+		stage := "Wird heruntergeladen"
+		switch p.Stage {
+		case install.StageVerify:
+			stage = "Wird geprüft"
+		case install.StageExtract:
+			stage = "Wird entpackt"
+		}
 		a.setInstallStatus(InstallStatus{
-			GameID: gameID, Running: true, Stage: "Wird heruntergeladen",
+			GameID: gameID, Running: true, Stage: stage,
 			Downloaded: p.Downloaded, Total: p.Total,
 			Percent: percent, BytesPerSecond: p.BytesPerSecond,
 		})
@@ -137,9 +147,7 @@ func (a *App) InstallGame(gameID string) (InstallResult, error) {
 		a.setInstallStatus(InstallStatus{GameID: gameID, Error: err.Error()})
 		return result, fmt.Errorf("Installation von %s fehlgeschlagen: %w", gameID, err)
 	}
-	// Verification and extraction happen after the download; say so rather than
-	// leaving the bar at 100% with nothing apparently happening.
-	a.setInstallStatus(InstallStatus{GameID: gameID, Running: true, Stage: "Wird geprüft und entpackt", Percent: 100})
+	a.setInstallStatus(InstallStatus{GameID: gameID, Running: true, Stage: "Wird abgeschlossen", Percent: 100})
 	candidates, err := install.FindExecutables(dir)
 	if err != nil {
 		return result, err

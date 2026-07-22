@@ -116,6 +116,9 @@ type EventLauncherReadiness struct {
 	RequiredVersion string `json:"requiredVersion"`
 	Required        bool   `json:"required"`
 	Status          string `json:"status"`
+	// DetectedVersion is only set when the launcher binary carried a readable
+	// Windows file version.
+	DetectedVersion string `json:"detectedVersion,omitempty"`
 }
 
 type EventGameReadiness struct {
@@ -1001,19 +1004,32 @@ func (a *App) loadEventReadiness(ctx context.Context, profile deviceclient.Profi
 		}
 		readiness.Games = append(readiness.Games, item)
 	}
+	installedLaunchers := discovery.DiscoverLaunchers()
 	requiredLaunchers, presentRequiredLaunchers := 0, 0
 	for _, launcher := range release.Launchers {
 		adapter := releaseLauncherAdapter(launcher.LauncherID)
 		item := EventLauncherReadiness{Launcher: launcher.LauncherID, RequiredVersion: launcher.Version, Required: launcher.Required, Status: "not_detected"}
-		for _, installation := range local.Installations {
-			if installation.Launcher == adapter {
-				item.Status = "detected_version_unverified"
+		// A launcher can be installed with no games in it, so check for the
+		// application itself first; inferring presence only from game finds
+		// reports a working installation as missing.
+		for _, installed := range installedLaunchers {
+			if installed.Adapter == adapter {
+				item.Status = "detected"
+				item.DetectedVersion = installed.Version
 				break
+			}
+		}
+		if item.Status == "not_detected" {
+			for _, installation := range local.Installations {
+				if installation.Launcher == adapter {
+					item.Status = "detected_version_unverified"
+					break
+				}
 			}
 		}
 		if launcher.Required {
 			requiredLaunchers++
-			if item.Status == "detected_version_unverified" {
+			if item.Status == "detected" || item.Status == "detected_version_unverified" {
 				presentRequiredLaunchers++
 			}
 		}

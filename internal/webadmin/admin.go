@@ -62,6 +62,7 @@ func New(st *store.Store, secureCookies bool, vault *secretbox.Box, options ...O
 	a.mux.HandleFunc("GET /admin/sources", a.requireLogin(a.sourcesPage))
 	a.mux.HandleFunc("GET /admin/clients", a.requireLogin(a.clientsPage))
 	a.mux.HandleFunc("POST /admin/clients/enrollment-code", a.requireLogin(a.createEnrollmentCode))
+	a.mux.HandleFunc("POST /admin/clients/device-status", a.requireLogin(a.setDeviceStatus))
 	a.mux.HandleFunc("POST /admin/clients/catalog-import", a.requireLogin(a.importClientInventoryItem))
 	a.mux.HandleFunc("POST /admin/clients/catalog-import-bulk", a.requireLogin(a.idempotentFormPost("POST /admin/clients/catalog-import-bulk", a.importClientInventoryBatch)))
 	a.mux.HandleFunc("POST /admin/api/v1/enrollment-codes", a.apiRoute(a.idempotentPost("POST /admin/api/v1/enrollment-codes", a.createEnrollmentCodeAPI)))

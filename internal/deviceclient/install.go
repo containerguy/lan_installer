@@ -18,6 +18,8 @@ type artifactFetcher struct{ client *Client }
 // InstallProgress reports how far a game install has got. Downloads here run
 // for minutes to hours, so the UI needs more than a spinner.
 type InstallProgress struct {
+	// Stage is one of install.StageDownload/StageVerify/StageExtract.
+	Stage      string
 	Downloaded int64
 	Total      int64
 	// BytesPerSecond is averaged over the transfer so far.
@@ -54,8 +56,14 @@ func (c *Client) InstallGameArchive(ctx context.Context, spec install.ArchiveIns
 			if elapsed > 0 {
 				rate = float64(downloaded) / elapsed
 			}
-			progress(InstallProgress{Downloaded: downloaded, Total: total, BytesPerSecond: rate})
+			progress(InstallProgress{Stage: install.StageDownload, Downloaded: downloaded, Total: total, BytesPerSecond: rate})
 		}
 	}
-	return install.InstallArchive(ctx, artifactFetcher{client: &client}, spec, gamesRoot, install.DefaultLimits)
+	return install.InstallArchive(ctx, artifactFetcher{client: &client}, spec, gamesRoot, install.DefaultLimits,
+		func(p install.Progress) {
+			if progress == nil {
+				return
+			}
+			progress(InstallProgress{Stage: p.Stage, Downloaded: p.Done, Total: p.Total})
+		})
 }
