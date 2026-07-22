@@ -11,6 +11,10 @@ on:
         description: "Portable Windows-GUI bauen (nur Artefakt, kein Release)"
         type: boolean
         default: true
+      exact_version:
+        description: "Exakte Version statt <wails>-test.<sha>, z.B. 0.2.0 fuer Aktivierungstests"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -99,12 +103,18 @@ jobs:
         env:
           RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_RELEASE_PUBLIC_KEY }}
           EVENT_RELEASE_PUBLIC_KEY: ${{ vars.LANREADY_EVENT_RELEASE_PUBLIC_KEY }}
+          EXACT_VERSION: ${{ inputs.exact_version }}
         run: |
           WAILS_VERSION=$(node -p "require('./cmd/lanready-gui/wails.json').info.productVersion")
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
             # A release artifact must never report a version the client does not know.
             test "$VERSION" = "$WAILS_VERSION" || { echo "Tag $VERSION passt nicht zu wails.json $WAILS_VERSION"; exit 1; }
+          elif [ -n "${EXACT_VERSION}" ]; then
+            # A prerelease suffix sorts below the release under SemVer, so a
+            # -test build can never satisfy a "minimum client version" check.
+            # This escape hatch exists for exactly those end-to-end tests.
+            VERSION="${EXACT_VERSION}"
           else
             VERSION="${WAILS_VERSION}-test.${GITHUB_SHA::7}"
           fi
