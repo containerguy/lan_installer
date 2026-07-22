@@ -41,6 +41,8 @@ type App struct {
 	validateManualExecutable func(string) error
 
 	opMu                    sync.Mutex
+	installMu               sync.Mutex
+	installStatus           InstallStatus
 	discoveryGeneration     uint64
 	lastDiscovery           *discovery.Result
 	authorizationID         string

@@ -64,6 +64,28 @@ type Bootstrap struct {
 	} `json:"clientUpdate"`
 }
 
+// artifactHTTPClient returns a client suitable for multi-gigabyte downloads.
+//
+// http.Client.Timeout covers reading the response body, so the 30s default used
+// for API calls aborts any sizeable artifact mid-transfer. Here the caller's
+// context bounds the overall duration instead, while the transport still guards
+// against a connection that stalls before sending headers.
+func artifactHTTPClient(value *http.Client) *http.Client {
+	client := httpClient(value)
+	clone := *client
+	clone.Timeout = 0
+	transport := http.DefaultTransport
+	if clone.Transport != nil {
+		transport = clone.Transport
+	}
+	if base, ok := transport.(*http.Transport); ok {
+		tuned := base.Clone()
+		tuned.ResponseHeaderTimeout = 60 * time.Second
+		clone.Transport = tuned
+	}
+	return &clone
+}
+
 func httpClient(value *http.Client) *http.Client {
 	client := &http.Client{Timeout: 30 * time.Second}
 	if value != nil {

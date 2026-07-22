@@ -81,3 +81,19 @@ test("the main executable is never chosen automatically", () => {
   const body = app.slice(start);
   assert.match(body, /install-pick-select["']\)\.value/, "the registered path must come from the user's selection");
 });
+
+test("install progress is polled and shown while a download runs", () => {
+  const start = app.indexOf("async function installGame");
+  const end = app.indexOf("function openInstallPicker");
+  const body = app.slice(start, end);
+  assert.match(body, /InstallStatusFor/, "progress must be polled from the backend");
+  assert.match(body, /progressText/, "polled status must be rendered");
+  assert.match(body, /clearInterval/, "the poll must stop when the install ends");
+});
+
+test("a running install is not re-rendered away", () => {
+  const start = app.indexOf("async function refreshInstalls");
+  const end = app.indexOf("function renderInstalls");
+  const body = app.slice(start, end);
+  assert.match(body, /installPoll/, "refresh must bail out while an install runs");
+});

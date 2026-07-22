@@ -48,6 +48,32 @@
     return `${item.name} (${item.sizeLabel}) herunterladen und nach\n${item.targetDir}\nentpacken?\n\nDer Download kann je nach Netzwerk lange dauern.`;
   }
 
+  // progressText turns raw counters into the three things a user actually wants
+  // during a multi-gigabyte download: how far, how fast, how much longer.
+  function progressText(status) {
+    if (!status || !status.running) return "";
+    if (!status.total || status.total <= 0) return status.stage || "Wird vorbereitet …";
+    const percent = Math.min(100, Math.max(0, Number(status.percent) || 0));
+    const done = formatSize(status.downloaded);
+    const total = formatSize(status.total);
+    let text = `${percent.toFixed(1)} % · ${done} von ${total}`;
+    const rate = Number(status.bytesPerSecond) || 0;
+    if (rate > 0) {
+      text += ` · ${formatSize(rate)}/s`;
+      const remaining = (status.total - status.downloaded) / rate;
+      if (remaining > 1 && Number.isFinite(remaining)) text += ` · noch ${formatDuration(remaining)}`;
+    }
+    return text;
+  }
+
+  function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    if (s < 60) return `${s} s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min`;
+    return `${Math.floor(m / 60)} h ${m % 60} min`;
+  }
+
   // candidateLabel marks the suggestion without hiding that it is only a guess.
   function candidateLabel(candidate) {
     const size = formatSize(candidate?.sizeBytes);
@@ -55,5 +81,5 @@
     return candidate?.recommended === true ? `${path} · ${size} · Vorschlag` : `${path} · ${size}`;
   }
 
-  return { formatSize, viewModel, confirmText, candidateLabel };
+  return { formatSize, formatDuration, progressText, viewModel, confirmText, candidateLabel };
 });

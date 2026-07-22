@@ -82,7 +82,7 @@ func (c *Client) fetchUpdateMetadata(ctx context.Context, trusted map[string]ed2
 	if err != nil {
 		return protocol.ClientUpdateMetadata{}, err
 	}
-	response, err := httpClient(c.HTTP).Do(request)
+	response, err := artifactHTTPClient(c.HTTP).Do(request)
 	if err != nil {
 		return protocol.ClientUpdateMetadata{}, fmt.Errorf("Clientupdate-Metadaten laden: %w", err)
 	}
@@ -143,7 +143,7 @@ func (c *Client) downloadVerifiedArtifact(ctx context.Context, artifactPath stri
 		request.Header.Set("Range", "bytes="+strconv.FormatInt(offset, 10)+"-"+strconv.FormatInt(metadata.Size-1, 10))
 		request.Header.Set("If-Range", `"sha256:`+metadata.SHA256+`"`)
 	}
-	response, err := httpClient(c.HTTP).Do(request)
+	response, err := artifactHTTPClient(c.HTTP).Do(request)
 	if err != nil {
 		return fmt.Errorf("%s herunterladen: %w", subject, err)
 	}

@@ -53,3 +53,28 @@ test("the recommended executable is marked as a suggestion, not a decision", () 
   assert.match(installs.candidateLabel({ relativePath: "FlatOut2.exe", sizeBytes: 12582912, recommended: true }), /Vorschlag/);
   assert.doesNotMatch(installs.candidateLabel({ relativePath: "unins000.exe", sizeBytes: 100, recommended: false }), /Vorschlag/);
 });
+
+test("progress shows percent, size, speed and remaining time", () => {
+  const text = installs.progressText({
+    running: true, downloaded: 644445616, total: 1288891233,
+    percent: 50, bytesPerSecond: 10485760
+  });
+  assert.match(text, /50\.0 %/);
+  assert.match(text, /MB\/s|GB\/s/);
+  assert.match(text, /noch/);
+});
+
+test("progress falls back to the stage while the total is unknown", () => {
+  assert.equal(installs.progressText({ running: true, stage: "Wird geprüft" }), "Wird geprüft");
+});
+
+test("no progress text when nothing is running", () => {
+  assert.equal(installs.progressText({ running: false }), "");
+  assert.equal(installs.progressText(null), "");
+});
+
+test("durations stay readable across magnitudes", () => {
+  assert.equal(installs.formatDuration(45), "45 s");
+  assert.equal(installs.formatDuration(300), "5 min");
+  assert.equal(installs.formatDuration(3900), "1 h 5 min");
+});

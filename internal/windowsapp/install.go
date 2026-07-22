@@ -31,6 +31,19 @@ type InstallCandidate struct {
 	Recommended  bool   `json:"recommended"`
 }
 
+// InstallStatus is polled by the UI while an install runs. Multi-gigabyte
+// downloads need a visible rate and percentage, not just a spinner.
+type InstallStatus struct {
+	GameID         string  `json:"gameId"`
+	Running        bool    `json:"running"`
+	Stage          string  `json:"stage"`
+	Downloaded     int64   `json:"downloaded"`
+	Total          int64   `json:"total"`
+	Percent        float64 `json:"percent"`
+	BytesPerSecond float64 `json:"bytesPerSecond"`
+	Error          string  `json:"error"`
+}
+
 // InstallResult reports where a game landed and which executables the user can
 // choose from. LANReady never picks the main program itself: a wrong guess
 // would silently misreport the installed version.
@@ -95,26 +108,42 @@ func (a *App) InstallGame(gameID string) (InstallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	a.opMu.Lock()
-	defer a.opMu.Unlock()
+	// The install holds no global lock: it runs for minutes to hours, and
+	// blocking every other action for that long would freeze the UI.
 	profile, err := a.connectedProfile()
 	if err != nil {
 		return result, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
 	defer cancel()
+	a.setInstallStatus(InstallStatus{GameID: gameID, Running: true, Stage: "Download wird vorbereitet"})
 	client := &deviceclient.Client{Profile: profile, HTTP: a.httpClient}
 	dir, err := client.InstallGameArchive(ctx, install.ArchiveInstall{
 		GameID: selected.GameID, Digest: selected.Digest,
 		Size: selected.Size, RelativePath: selected.RelativePath,
-	}, root)
+	}, root, func(p deviceclient.InstallProgress) {
+		percent := 0.0
+		if p.Total > 0 {
+			percent = float64(p.Downloaded) / float64(p.Total) * 100
+		}
+		a.setInstallStatus(InstallStatus{
+			GameID: gameID, Running: true, Stage: "Wird heruntergeladen",
+			Downloaded: p.Downloaded, Total: p.Total,
+			Percent: percent, BytesPerSecond: p.BytesPerSecond,
+		})
+	})
 	if err != nil {
+		a.setInstallStatus(InstallStatus{GameID: gameID, Error: err.Error()})
 		return result, fmt.Errorf("Installation von %s fehlgeschlagen: %w", gameID, err)
 	}
+	// Verification and extraction happen after the download; say so rather than
+	// leaving the bar at 100% with nothing apparently happening.
+	a.setInstallStatus(InstallStatus{GameID: gameID, Running: true, Stage: "Wird geprüft und entpackt", Percent: 100})
 	candidates, err := install.FindExecutables(dir)
 	if err != nil {
 		return result, err
 	}
+	a.setInstallStatus(InstallStatus{GameID: gameID, Stage: "Fertig", Percent: 100})
 	result = InstallResult{GameID: gameID, TargetDir: dir, Candidates: make([]InstallCandidate, 0, len(candidates))}
 	for index, candidate := range candidates {
 		result.Candidates = append(result.Candidates, InstallCandidate{
@@ -125,6 +154,24 @@ func (a *App) InstallGame(gameID string) (InstallResult, error) {
 		})
 	}
 	return result, nil
+}
+
+// setInstallStatus stores the latest progress for InstallStatusFor to read.
+func (a *App) setInstallStatus(status InstallStatus) {
+	a.installMu.Lock()
+	a.installStatus = status
+	a.installMu.Unlock()
+}
+
+// InstallStatusFor returns the current progress; the UI polls this while an
+// install runs.
+func (a *App) InstallStatusFor(gameID string) InstallStatus {
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	if a.installStatus.GameID != gameID {
+		return InstallStatus{GameID: gameID}
+	}
+	return a.installStatus
 }
 
 // installTimeout bounds a single game install. Packages are multi-gigabyte, so

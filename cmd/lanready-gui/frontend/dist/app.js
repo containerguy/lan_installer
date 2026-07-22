@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { installs: null, installsError: "", installPick: null, connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null, standaloneCatalog: [] };
+const state = { installPoll: null, installs: null, installsError: "", installPick: null, connection: null, discovery: null, selected: new Set(), authorizedIndices: [], activities: [], auth: null, authAttempt: 0, pollTimer: null, standaloneCatalog: [] };
 let modalReturnFocus = null;
 const $ = (id) => document.getElementById(id);
 const api = (name, ...args) => {
@@ -503,6 +503,9 @@ function launcherName(value) { return ({steam:"Steam", ea_app:"EA App", ubisoft_
 // refreshInstalls is fire-and-forget: the install panel must never delay or
 // break the main state render if the event cannot be read.
 async function refreshInstalls() {
+  // Never re-render the list mid-install: it would replace the button whose
+  // click handler is still awaiting InstallGame.
+  if (state.installPoll) return;
   if (!connectionUsable()) { state.installs = null; state.installsError = ""; renderInstalls(); return; }
   try { state.installs = await api("PendingInstalls"); state.installsError = ""; }
   catch (error) { state.installs = null; state.installsError = errorText(error); }
@@ -527,7 +530,9 @@ function renderInstalls() {
     name.textContent = item.name;
     const meta = document.createElement("small");
     meta.textContent = item.installed ? `${item.sizeLabel} · installiert in ${item.targetDir}` : `${item.sizeLabel} · noch nicht installiert`;
-    text.append(name, document.createElement("br"), meta);
+    const progress = document.createElement("small");
+    progress.className = "install-progress";
+    text.append(name, document.createElement("br"), meta, document.createElement("br"), progress);
     const action = document.createElement("button");
     action.className = "button button-ghost";
     action.textContent = item.installed ? "Installiert" : "Installieren";
@@ -544,13 +549,29 @@ async function installGame(item, button) {
   if (!window.confirm(window.LANReadyInstalls.confirmText(item))) return;
   setBusy(button, true, "Wird geladen …");
   setError("install-error", "");
+  // Poll progress independently of the install call: the download runs for
+  // minutes to hours and the user needs to see percent, speed and ETA.
+  const row = button.closest(".install-row");
+  const progress = row ? row.querySelector(".install-progress") : null;
+  state.installPoll = setInterval(async () => {
+    try {
+      const status = await api("InstallStatusFor", item.gameId);
+      const text = window.LANReadyInstalls.progressText(status);
+      if (progress && text) progress.textContent = text;
+    } catch (_) { /* transient poll failure must not abort the install */ }
+  }, 1000);
   try {
     const result = await api("InstallGame", item.gameId);
     await refreshInstalls();
     openInstallPicker(item, result);
   }
   catch (error) { setError("install-error", errorText(error)); }
-  finally { setBusy(button, false, "Installieren"); }
+  finally {
+    clearInterval(state.installPoll);
+    state.installPoll = null;
+    if (progress) progress.textContent = "";
+    setBusy(button, false, "Installieren");
+  }
 }
 
 function openInstallPicker(item, result) {
