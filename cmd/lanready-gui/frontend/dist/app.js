@@ -146,7 +146,8 @@ function renderEventReadiness() {
   const rows = [];
   model.launchers.forEach((launcher) => rows.push(readinessComponent(
     "Launcher", launcherName(launcher.launcher === "ea-app" ? "ea_app" : launcher.launcher === "ubisoft-connect" ? "ubisoft_connect" : launcher.launcher),
-    `Soll ${launcher.requiredVersion} · ${launcher.statusLabel}`, launcher.required, launcher.status
+    `Soll ${launcher.requiredVersion} · ${launcher.statusLabel}`, launcher.required, launcher.status,
+    launcher.status === "not_detected" ? launcher.launcher : ""
   )));
   model.games.forEach((game) => {
     const detected = game.detectedVersion ? `Lokal ${game.detectedVersion}` : "Keine lokale Version";
@@ -157,7 +158,7 @@ function renderEventReadiness() {
   components.classList.toggle("hidden", rows.length === 0);
 }
 
-function readinessComponent(kind, name, details, required, status) {
+function readinessComponent(kind, name, details, required, status, missingLauncherId) {
   const row = document.createElement("div");
   row.className = "event-component";
   const icon = document.createElement("span");
@@ -173,7 +174,25 @@ function readinessComponent(kind, name, details, required, status) {
   badge.className = `component-state state-${status}`;
   badge.textContent = window.LANReadyReadiness.componentBadge(status, required);
   row.append(icon, copy, badge);
+  // LANReady does not install launchers; when one is missing it points at the
+  // official download page instead of leaving the user with just "not found".
+  if (missingLauncherId) addLauncherDownloadLink(copy, missingLauncherId);
   return row;
+}
+
+async function addLauncherDownloadLink(container, launcherId) {
+  let page = "";
+  try { page = await api("LauncherDownloadPage", launcherId); }
+  catch (_) { return; }
+  if (!page) return;
+  const action = document.createElement("button");
+  action.className = "text-button launcher-download";
+  action.textContent = "Launcher herunterladen ↗";
+  action.addEventListener("click", async () => {
+    try { await api("OpenLauncherDownload", launcherId); }
+    catch (error) { setPersistentError("global", errorText(error)); }
+  });
+  container.append(document.createElement("br"), action);
 }
 
 function primaryAction() {

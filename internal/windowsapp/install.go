@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/containerguy/lan_installer/internal/deviceclient"
@@ -232,4 +233,33 @@ func (a *App) gamesRoot() (string, error) {
 
 func joinPath(dir, relative string) string {
 	return filepath.Join(dir, relative)
+}
+
+// launcherDownloadPages are the official pages a user gets sent to when a
+// required launcher is missing.
+//
+// These URLs are compiled in on purpose. Taking them from the signed event
+// payload would turn a release into a way to point users at an arbitrary site,
+// and that is a far worse trade than keeping a short list in the client.
+var launcherDownloadPages = map[string]string{
+	"steam":           "https://store.steampowered.com/about/",
+	"ea-app":          "https://www.ea.com/ea-app",
+	"ubisoft-connect": "https://ubisoftconnect.com/",
+}
+
+// LauncherDownloadPage returns the official download page for a launcher, or an
+// empty string if the client knows none. The UI only offers a link when this
+// returns something.
+func (a *App) LauncherDownloadPage(launcherID string) string {
+	return launcherDownloadPages[strings.TrimSpace(launcherID)]
+}
+
+// OpenLauncherDownload opens the official download page in the user's browser.
+// LANReady does not install launchers itself; it only points the way.
+func (a *App) OpenLauncherDownload(launcherID string) error {
+	page := a.LauncherDownloadPage(launcherID)
+	if page == "" {
+		return fmt.Errorf("für %q ist keine offizielle Downloadseite hinterlegt", launcherID)
+	}
+	return deviceclient.OpenBrowser(page)
 }

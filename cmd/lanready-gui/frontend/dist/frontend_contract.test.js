@@ -97,3 +97,11 @@ test("a running install is not re-rendered away", () => {
   const body = app.slice(start, end);
   assert.match(body, /installPoll/, "refresh must bail out while an install runs");
 });
+
+test("a missing launcher offers the official download page", () => {
+  const start = app.indexOf("function readinessComponent");
+  const body = app.slice(start, app.indexOf("function primaryAction"));
+  assert.match(body, /missingLauncherId/, "renderer must know when a launcher is missing");
+  assert.match(body, /LauncherDownloadPage/, "the page must come from the backend, not the payload");
+  assert.match(body, /OpenLauncherDownload/, "clicking must open the official page");
+});
