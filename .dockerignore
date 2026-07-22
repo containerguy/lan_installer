@@ -1,0 +1,11 @@
+.git
+.github
+bin
+dist
+data
+*.key
+.env
+.env.*
+secrets
+release-work
+.tmp-uiqa

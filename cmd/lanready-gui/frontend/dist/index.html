@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'">
+  <title>LANReady</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="readiness.css">
+  <link rel="stylesheet" href="standalone.css">
+  <link rel="stylesheet" href="accessibility.css">
+  <script defer src="readiness.js"></script>
+  <script defer src="installs.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Hauptnavigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><strong>LANReady</strong><small>Game preparation</small></div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-page="overview" aria-current="page"><span class="nav-icon">⌂</span>Übersicht</button>
+        <button class="nav-item" data-page="games"><span class="nav-icon">◈</span>Meine Spiele <span id="game-count-badge" class="nav-badge hidden">0</span></button>
+        <button class="nav-item" data-page="activity"><span class="nav-icon">↗</span>Aktivität</button>
+        <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span>Einstellungen</button>
+      </nav>
+      <div class="sidebar-status">
+        <div class="status-dot" id="sidebar-dot"></div>
+        <div><strong id="sidebar-status">Nicht verbunden</strong><small id="sidebar-device">Managementserver</small></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div><p class="eyebrow" id="page-eyebrow">DEIN LAN-STATUS</p><h1 id="page-title">Übersicht</h1></div>
+        <button id="connect-button" class="button button-primary">PC verbinden</button>
+      </header>
+      <div id="global-error" class="persistent-error hidden" role="alert"><span id="global-error-text"></span><div><button id="global-retry" class="text-button">Erneut laden</button><button id="global-reset" class="text-button hidden">Lokales Profil zurücksetzen</button></div></div>
+
+      <section id="page-overview" class="page active">
+        <div class="hero-card">
+          <div class="hero-glow"></div>
+          <div class="hero-copy">
+            <span class="pill" id="hero-pill"><span></span>Nicht verbunden</span>
+            <h2 id="hero-title">Mach deinen PC bereit für die nächste LAN.</h2>
+            <p id="hero-text">Verbinde LANReady mit dem Managementserver. Danach findest du installierte Spiele und entscheidest selbst, was synchronisiert wird.</p>
+            <div class="hero-actions">
+              <button id="hero-action" class="button button-light">PC verbinden</button>
+              <button id="hero-secondary" class="button button-ghost hidden">Spiele suchen</button>
+            </div>
+          </div>
+          <div class="readiness" aria-label="Bereitschaftsstatus">
+            <div class="readiness-ring"><div><strong id="ready-number">—</strong></div></div>
+            <p id="ready-label">Event-Bereitschaft</p>
+          </div>
+        </div>
+
+        <article id="event-readiness-panel" class="panel event-readiness-panel tone-neutral" aria-labelledby="event-readiness-title">
+          <div class="event-readiness-heading">
+            <div><p class="eyebrow">SIGNIERTER EVENTSTAND</p><h3 id="event-readiness-title">Noch kein signiertes Event aktiviert</h3></div>
+            <span id="event-readiness-badge" class="readiness-badge">Kein aktives Event</span>
+          </div>
+          <p id="event-readiness-message">Ein Katalogeintrag allein verändert die Event-Bereitschaft nicht. Ein Event muss veröffentlicht und ausdrücklich aktiviert werden.</p>
+          <div id="event-readiness-components" class="event-readiness-components hidden" aria-label="Event-Komponenten"></div>
+        </article>
+
+        <article id="install-panel" class="panel install-panel hidden" aria-labelledby="install-title">
+          <div class="event-readiness-heading">
+            <div><p class="eyebrow">VOM EVENT BEREITGESTELLT</p><h3 id="install-title">Spiele über LANReady installieren</h3></div>
+            <span id="install-badge" class="readiness-badge">—</span>
+          </div>
+          <p id="install-message">Installationsstand wird geladen …</p>
+          <ul id="install-list" class="install-list" aria-label="Bereitgestellte Spiele"></ul>
+          <div id="install-error" class="form-error hidden" role="alert"></div>
+        </article>
+
+        <div class="stats-grid">
+          <article class="stat-card"><div class="stat-icon purple">◈</div><div><span>Gefundene Spiele</span><strong id="stat-games">—</strong><small id="stat-games-note">Noch nicht gesucht</small></div></article>
+          <article class="stat-card"><div class="stat-icon cyan">✓</div><div><span>Ausgewählt</span><strong id="stat-selected">—</strong><small>Du behältst die Kontrolle</small></div></article>
+          <article class="stat-card"><div class="stat-icon amber">↗</div><div><span>Letzte Synchronisation</span><strong id="stat-sync">—</strong><small id="stat-sync-note">Noch keine in dieser Sitzung</small></div></article>
+        </div>
+
+        <div class="content-grid">
+          <article class="panel next-step">
+            <div class="panel-heading"><div><p class="eyebrow">NÄCHSTER SCHRITT</p><h3 id="next-title">Managementserver verbinden</h3></div><span class="step-number" id="step-number">01</span></div>
+            <p id="next-text">Ein Admin erzeugt in der Weboberfläche einen einmaligen Enrollment-Code. Der private Geräteschlüssel bleibt geschützt in deinem Windows-Benutzerprofil.</p>
+            <button id="next-action" class="text-button">Jetzt verbinden <span>→</span></button>
+          </article>
+          <article class="panel privacy-panel">
+            <div class="shield" aria-hidden="true">◇</div>
+            <div><h3>Deine Zugangsdaten bleiben bei dir</h3><p>LANReady liest oder speichert keine Steam-, EA- oder Ubisoft-Passwörter. Die persönliche Anmeldung gilt nur für die bestätigte Inventarsynchronisation.</p></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-games" class="page">
+        <div id="games-status" class="sr-only" role="status" aria-live="polite"></div>
+        <div class="section-toolbar">
+          <div><h2>Installierte Spiele</h2><p>Steam, EA App und Ubisoft Connect werden lokal geprüft.</p></div>
+          <div class="toolbar-actions"><button id="manual-game-button" class="button button-ghost">Spiel manuell hinzufügen</button><button id="select-all-button" class="button button-ghost hidden">Alle auswählen</button><button id="clear-selection-button" class="button button-ghost hidden">Auswahl leeren</button><button id="discover-button" class="button button-primary">Spiele suchen</button></div>
+        </div>
+        <div id="games-error" class="persistent-error hidden" role="alert"><span id="games-error-text"></span><button id="games-retry" class="text-button">Erneut versuchen</button></div>
+        <div id="warning-box" class="warning-box hidden"></div>
+        <div id="games-empty" class="empty-state">
+          <div class="empty-icon">⌕</div><h3 id="games-empty-title">Noch keine Suche durchgeführt</h3><p id="games-empty-copy">LANReady durchsucht ausschließlich bekannte Launcher-Verzeichnisse und Registry-Einträge.</p>
+          <button id="empty-discover" class="button button-light">Suche starten</button>
+        </div>
+        <div id="games-list" class="games-list hidden"></div>
+        <div id="selection-bar" class="selection-bar hidden">
+          <div><strong id="selection-count">0 Spiele ausgewählt</strong><small>Installationspfade werden nur für die Admin-Inventaransicht übertragen.</small></div>
+          <button id="sync-button" class="button button-primary">Auswahl synchronisieren</button>
+        </div>
+      </section>
+
+      <section id="page-activity" class="page">
+        <div class="section-toolbar"><div><h2>Aktivität</h2><p>Vorgänge dieser LANReady-Sitzung.</p></div></div>
+        <div id="activity-list" class="timeline"><div class="empty-activity"><span>↗</span><p>Noch keine Vorgänge in dieser Sitzung.</p></div></div>
+      </section>
+
+      <section id="page-settings" class="page">
+        <div class="settings-grid">
+          <article class="panel settings-card"><p class="eyebrow">VERBINDUNG</p><h3 id="settings-device">Nicht verbunden</h3><dl><div><dt>Server</dt><dd id="settings-server">—</dd></div><div><dt>Geräte-ID</dt><dd id="settings-id">—</dd></div><div><dt>Clientversion</dt><dd id="settings-version">—</dd></div></dl><button id="disconnect-button" class="button button-danger hidden">Verbindung trennen</button><button id="quit-agent" class="button button-ghost hidden">LANReady für diese Sitzung beenden</button></article>
+          <article class="panel settings-card"><p class="eyebrow">DATENSCHUTZ</p><h3>Benutzergebunden geschützt</h3><p>Der private Geräteschlüssel wird mit Windows DPAPI für deinen Benutzer geschützt. Persönliche Zugriffstokens bleiben nur im Arbeitsspeicher und werden nach der Synchronisation verworfen.</p></article>
+          <article class="panel settings-card"><p class="eyebrow">UPDATE-KANAL</p><h3>Stable</h3><p id="update-copy">LANReady prüft Update-Metadaten und Binärdatei kryptografisch. Die letzte funktionierende Version wird bei einem fehlgeschlagenen Neustart automatisch wiederhergestellt.</p><span class="tag" id="update-status">Aktuell</span><div id="update-progress-box" class="update-progress hidden" role="status" aria-live="polite"><span id="update-progress-text">Update wird vorbereitet …</span><progress id="update-progress" max="100" value="0"></progress><button id="cancel-update" class="button button-ghost" type="button">Download abbrechen</button></div><button id="install-update" class="button button-primary hidden">Signiertes Update installieren</button></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden" role="presentation">
+    <section id="enroll-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="enroll-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">SICHER VERBINDEN</p><h2 id="enroll-title">Diesen PC registrieren</h2><p>Den einmaligen Code findest du als Admin unter <strong>Clients</strong> in der Managementoberfläche.</p>
+      <form id="enroll-form">
+        <label>Managementserver<input id="server-url" name="server" type="url" required value="https://game-manager.familie-keller.info" autocomplete="url" autofocus></label>
+        <label>Gerätename<input id="device-name" name="deviceName" maxlength="128" placeholder="z. B. Keller-PC" autocomplete="off"></label>
+        <label>Enrollment-Code<input id="enrollment-code" name="code" maxlength="64" required placeholder="XXXX-XXXX" autocomplete="one-time-code" spellcheck="false"></label>
+        <div id="enroll-error" class="form-error hidden" role="alert"></div>
+        <button id="enroll-submit" class="button button-primary button-full" type="submit">PC sicher verbinden</button>
+      </form>
+      <p class="modal-note">Der Code wird nur einmal verwendet. Launcher-Passwörter werden nicht benötigt.</p>
+    </section>
+
+    <section id="auth-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">PERSÖNLICHE FREIGABE</p><h2 id="auth-title">Im Browser anmelden</h2><p>Der Browser wurde geöffnet. Melde dich am Managementserver an und bestätige dieses Gerät.</p>
+      <div class="device-code"><span>Dein Einmalcode</span><strong id="auth-code">—</strong></div>
+      <a id="auth-link" class="button button-ghost button-full" href="#">Link im Browser öffnen</a>
+      <div class="waiting"><span></span><p id="auth-status">Warte auf Bestätigung …</p></div>
+      <div id="auth-error" class="form-error hidden" role="alert"></div>
+      <button id="auth-retry" class="button button-ghost button-full hidden">Anmeldung neu starten</button>
+      <p class="modal-note">Die Anmeldung wird nicht gespeichert und läuft automatisch ab.</p>
+    </section>
+
+    <section id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">LETZTE BESTÄTIGUNG</p><h2 id="confirm-title">Inventar synchronisieren?</h2><p id="confirm-copy">Du überträgst die ausgewählten Spiele an den Managementserver.</p>
+      <div id="confirm-list" class="confirm-list" aria-label="Ausgewählte Installationen"></div>
+      <div class="consent-box"><strong>Übertragen werden</strong><ul><li>Launcher und externe Spiel-ID</li><li>erkannte Version und Anzeigename</li><li>lokaler Installationspfad</li></ul></div>
+      <div id="confirm-error" class="form-error hidden" role="alert"></div>
+      <div class="modal-actions"><button class="button button-ghost" data-close-modal>Abbrechen</button><button id="confirm-sync" class="button button-primary">Jetzt synchronisieren</button></div>
+    </section>
+
+    <section id="manual-game-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="manual-game-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">OHNE LAUNCHER</p><h2 id="manual-game-title">Kopiertes Spiel hinzufügen</h2><p>Wähle ein vom Admin vorbereitetes Katalogspiel und anschließend dessen Hauptprogramm. Unbekannte Spiele können hier nicht frei eingetragen werden.</p>
+      <form id="manual-game-form">
+        <label>Spiel aus dem Managementkatalog<select id="manual-game-catalog" required></select></label>
+        <label>Hauptprogramm<input id="manual-game-path" readonly required placeholder="Noch keine EXE ausgewählt"></label>
+        <button id="manual-game-browse" class="button button-ghost button-full" type="button">EXE auswählen</button>
+        <div id="manual-game-error" class="form-error hidden" role="alert"></div>
+        <button id="manual-game-save" class="button button-primary button-full" type="submit">Geschützt hinzufügen</button>
+      </form>
+      <p class="modal-note">LANReady speichert den Pfad im DPAPI-geschützten Benutzerprofil. Die Windows-Dateiversion wird nur verwendet, wenn sie in der EXE vorhanden ist.</p>
+    </section>
+
+    <section id="install-pick-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="install-pick-title">
+      <button class="modal-close" data-close-modal aria-label="Dialog schließen">×</button><p class="eyebrow">INSTALLATION ABGESCHLOSSEN</p><h2 id="install-pick-title">Hauptprogramm auswählen</h2><p id="install-pick-intro">Die Dateien wurden entpackt. Wähle das Hauptprogramm des Spiels aus, damit LANReady die Version erkennen kann.</p>
+      <form id="install-pick-form">
+        <label>Gefundene Programme<select id="install-pick-select" required></select></label>
+        <div id="install-pick-error" class="form-error hidden" role="alert"></div>
+        <button id="install-pick-save" class="button button-primary button-full" type="submit">Als Hauptprogramm übernehmen</button>
+      </form>
+      <p class="modal-note">Der erste Eintrag ist nur ein Vorschlag. LANReady wählt bewusst nicht selbst aus, weil ein falsches Programm die erkannte Version verfälschen würde.</p>
+    </section>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+</body>
+</html>

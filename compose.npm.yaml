@@ -1,0 +1,12 @@
+services:
+  server:
+    ports: !reset []
+    networks:
+      proxy:
+        aliases:
+          - lanready-server
+
+networks:
+  proxy:
+    name: ${LANREADY_PROXY_NETWORK:-nginx-proxy-manager_default}
+    external: true

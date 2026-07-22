@@ -1,0 +1,47 @@
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.persistent-error > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.modal select {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b1324;
+  color: #eef3ff;
+  outline: none;
+}
+
+.modal select:focus {
+  border-color: #7868ff;
+  box-shadow: 0 0 0 3px rgba(120, 104, 255, .1);
+}
+
+.game-card.manual-game-card {
+  grid-template-columns: auto 1fr auto auto;
+}
+
+.manual-remove {
+  border: 0;
+  background: transparent;
+  color: #ffadb6;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.manual-remove:hover {
+  text-decoration: underline;
+}

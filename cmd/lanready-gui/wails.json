@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "LANReady",
+  "outputfilename": "LANReady.exe",
+  "frontend:dir": "./frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "wailsjsdir": "./frontend/generated",
+  "build:dir": "./build",
+  "author": {
+    "name": "LANReady Project",
+    "email": ""
+  },
+  "info": {
+    "companyName": "LANReady Project",
+    "productName": "LANReady",
+    "productVersion": "0.2.0",
+    "copyright": "Copyright 2026 LANReady Project",
+    "comments": "LANReady client for managed LAN game preparation"
+  }
+}
