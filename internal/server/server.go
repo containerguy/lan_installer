@@ -75,6 +75,12 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.index)
 	s.mux.HandleFunc("GET /healthz", s.health)
+	// Public on purpose: a new PC needs the client before it has any
+	// credentials. Enrolling still requires a one-time code.
+	s.mux.HandleFunc("GET /download", s.downloadPage)
+	s.mux.HandleFunc("GET /download/{$}", s.downloadPage)
+	s.mux.HandleFunc("GET /download/lanready.exe", s.downloadClient)
+	s.mux.HandleFunc("GET /download/info", s.clientDownloadInfo)
 	if s.admin != nil {
 		s.mux.Handle("/admin/", s.admin)
 	}
